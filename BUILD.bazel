@@ -69,3 +69,26 @@ compile_pip_requirements(
     ],
     requirements_txt = "python_requirements_lock.txt",
 )
+
+generate_someip_config_bin(
+    name = "gatewayd_config_bin_gen",
+    json = "//src/gatewayd/etc:gatewayd_config.json",
+    output = "gatewayd_config.bin",
+)
+
+exports_files([
+    "gatewayd_config.json",
+    "gatewayd_config.fbs",
+    "gatewayd_config.schema.json",
+])
+
+platform(
+    name = "aarch64-linux-gcc_12.2.0-posix-direct",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+        "@score_bazel_platforms//version:gcc_12.2.0",
+        "@score_bazel_platforms//runtime_es:posix",
+    ],
+    visibility = ["//visibility:public"],
+)

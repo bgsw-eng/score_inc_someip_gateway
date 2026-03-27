@@ -37,8 +37,14 @@ build --tool_java_runtime_version=remotejdk_17
 common:_toolchain_common --host_platform=@score_bazel_platforms//:x86_64-linux
 common:_toolchain_common --extra_toolchains=@score_gcc_x86_64_toolchain//:all
 common:_toolchain_common --extra_toolchains=@score_toolchains_rust//toolchains/ferrocene:ferrocene_x86_64_unknown_linux_gnu
-
-
+common:linux_aarch64_score_gcc_12_2_0_posix --platforms=@score_bazel_platforms//:aarch64-linux-gcc_12.2.0-posix
+common:linux_aarch64_score_gcc_12_2_0_posix --extra_toolchains=@score_gcc_aarch64_toolchain//:aarch64-linux-gcc_12.2.0
+common:aarch64-linux --copt=-mno-outline-atomics
+# --- aarch64-linux link model fixes (Rust + C++) ---
+build:aarch64-linux --features=-pie
+build:aarch64-linux --linkopt=-no-pie
+build:aarch64-linux --@rules_rust//rust/settings:extra_rustc_flag=-Clink-arg=-no-pie
+build:aarch64-linux --@rules_rust//rust/settings:extra_rustc_flag=-Crelocation-model=static
 common:x86_64-linux --config=_toolchain_common
 common:x86_64-linux --platforms=@score_bazel_platforms//:x86_64-linux
 common:x86_64-linux --extra_toolchains=@score_gcc_x86_64_toolchain//:all
@@ -46,7 +52,10 @@ common:x86_64-linux --extra_toolchains=@score_toolchains_rust//toolchains/ferroc
 common:x86_64-linux --repo_env=TARGET_ARCH=x86_64
 
 common:aarch64-linux --config=_toolchain_common
-common:aarch64-linux --platforms=@score_bazel_platforms//:aarch64-linux-gcc_12.2.0-posix
+common:aarch64-linux --platforms=//:aarch64-linux-gcc_12.2.0-posix-direct
+#common:aarch64-linux --platforms=@score_bazel_platforms//:aarch64-linux-gcc_12.2.0-posix
+#common:linux_aarch64_score_gcc_12_2_0_posix --platforms=@score_bazel_platforms//:aarch64-linux-gcc_12.2.0-posix
+#common:linux_aarch64_score_gcc_12_2_0_posix --extra_toolchains=@score_gcc_aarch64_toolchain//:aarch64-linux-gcc_12.2.0
 common:aarch64-linux --extra_toolchains=@score_gcc_aarch64_toolchain//:all
 common:aarch64-linux --extra_toolchains=@score_toolchains_rust//toolchains/ferrocene:ferrocene_aarch64_unknown_linux_gnu
 common:aarch64-linux --repo_env=TARGET_ARCH=aarch64
@@ -83,8 +92,3 @@ common --@score_baselibs//score/memory/shared/flags:use_typedshmd=False
 common --@score_baselibs//score/mw/log/detail/flags:KUse_Stub_Implementation_Only=False
 common --@score_baselibs//score/mw/log/flags:KRemote_Logging=False
 common --@score_communication//score/mw/com/flags:tracing_library=stub
-
-# Import custom user settings
-# Can be used to enable e.g. sanitizers or other features without modifying the main .bazelrc
-# For definition of sanitizer features see https://github.com/eclipse-score/bazel_cpp_toolchains/blob/main/templates/linux/cc_toolchain_config.bzl.template
-try-import %workspace%/user.bazelrc

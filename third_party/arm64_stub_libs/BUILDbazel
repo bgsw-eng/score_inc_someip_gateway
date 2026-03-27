@@ -1,0 +1,8 @@
+# third_party/arm64_stub_libs/BUILD.bazel
+cc_library(
+    name = "libacl_stub",
+    srcs = ["usr/lib/libacl.so"],
+    hdrs = [],
+    linkshared = True,
+    visibility = ["//visibility:public"],
+)

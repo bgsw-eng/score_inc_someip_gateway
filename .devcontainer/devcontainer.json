@@ -3,21 +3,21 @@
     "image": "ghcr.io/eclipse-score/devcontainer:1.0.0",
     "containerUser": "root",
     "initializeCommand": "mkdir -p ${localEnv:HOME}/.cache/bazel",
-    //"containerEnv": {
-    //    "HTTP_PROXY": "http://rb-proxy-de.bosch.com:8080",
-    //    "HTTPS_PROXY": "http://rb-proxy-de.bosch.com:8080",
-    //    "NO_PROXY": "localhost,127.0.0.1,::1,.bosch.com",
-    //    "http_proxy": "http://rb-proxy-de.bosch.com:8080",
-    //    "https_proxy": "http://rb-proxy-de.bosch.com:8080",
-    //    "no_proxy": "localhost,127.0.0.1,::1,.bosch.com"
-    //},
     "containerEnv": {
-        "HTTP_PROXY": "http://192.168.229.1:3129",
-        "HTTPS_PROXY": "http://192.168.229.1:3129",
-        "http_proxy": "http://192.168.229.1:3129",
-        "https_proxy": "http://192.168.229.1:3129",
-        "NO_PROXY": "127.0.0.1,localhost,::1"
+        "HTTP_PROXY": "http://rb-proxy-de.bosch.com:8080",
+        "HTTPS_PROXY": "http://rb-proxy-de.bosch.com:8080",
+        "NO_PROXY": "localhost,127.0.0.1,::1,.bosch.com",
+        "http_proxy": "http://rb-proxy-de.bosch.com:8080",
+        "https_proxy": "http://rb-proxy-de.bosch.com:8080",
+        "no_proxy": "localhost,127.0.0.1,::1,.bosch.com"
     },
+    //"containerEnv": {
+    //    "HTTP_PROXY": "http://192.168.229.1:3129",
+    //    "HTTPS_PROXY": "http://192.168.229.1:3129",
+    //    "http_proxy": "http://192.168.229.1:3129",
+    //    "https_proxy": "http://192.168.229.1:3129",
+    //    "NO_PROXY": "127.0.0.1,localhost,::1"
+    //},
     "runArgs": [
         "--privileged"
     ],

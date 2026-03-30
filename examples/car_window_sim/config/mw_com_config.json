@@ -37,6 +37,44 @@
           ]
         }
       ]
+    },
+    {
+      "serviceTypeName": "/carlock/LockControl",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 6434,
+          "events": [
+            {
+              "eventName": "lock_unlock_cmd",
+              "eventId": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "serviceTypeName": "/car/LockUnlockStatus",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 12291,
+          "events": [
+            {
+              "eventName": "lock_status",
+              "eventId": 2
+            }
+          ]
+        }
+      ]
     }
   ],
   "serviceInstances": [
@@ -101,6 +139,40 @@
           "events": [
             {
               "eventName": "window_control",
+              "numberOfSampleSlots": 10,
+              "maxSubscribers": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "instanceSpecifier": "carlock/LockControl1",
+      "serviceTypeName": "/carlock/LockControl",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 1,
+          "allowedConsumer": {
+            "QM": [
+              4004,
+              0
+            ]
+          },
+          "allowedProvider": {
+            "QM": [
+              4003,
+              0
+            ]
+          },
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "lock_unlock_cmd",
               "numberOfSampleSlots": 10,
               "maxSubscribers": 3
             }

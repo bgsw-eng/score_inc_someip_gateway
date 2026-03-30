@@ -15,12 +15,14 @@
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
+#include <mutex>
 #include <thread>
+#include <vector>
 #include <vsomeip/defines.hpp>
 #include <vsomeip/primitive_types.hpp>
 #include <vsomeip/vsomeip.hpp>
 
-#include "score/mw/com/runtime.h"
+// #include "score/mw/com/runtime.h"
 #include "score/span.hpp"
 #include "src/network_service/interfaces/message_transfer.h"
 
@@ -28,9 +30,15 @@ const char* someipd_name = "someipd";
 
 static const vsomeip::service_t service_id = 0x1111;
 static const vsomeip::instance_t service_instance_id = 0x2222;
+static const vsomeip::service_t SAMPLE_SERVICE_ID = 0x1234;
+static const vsomeip::instance_t SAMPLE_INSTANCE_ID = 0x5678;
 static const vsomeip::method_t service_method_id = 0x3333;
-
+static const vsomeip::event_t SAMPLE_EVENT_ID = 0x8778;
+static const vsomeip::eventgroup_t SAMPLE_EVENTGROUP_ID = 0x4465;
 static const std::size_t max_sample_count = 10;
+
+// RBC (READ only) — signal table driven, see rbc_signals[] in main()
+static const vsomeip::instance_t RBC_INSTANCE_ID = 0x0001;
 
 #define SAMPLE_SERVICE_ID 0x1234
 #define RESPONSE_SAMPLE_SERVICE_ID 0x4321
@@ -47,13 +55,16 @@ static const std::size_t max_sample_count = 10;
 #define OTHER_SAMPLE_INSTANCE_ID 0x5422
 #define OTHER_SAMPLE_METHOD_ID 0x1421
 
-using score::someip_gateway::network_service::interfaces::message_transfer::
+/*using score::someip_gateway::network_service::interfaces::message_transfer::
     SomeipMessageTransferProxy;
 using score::someip_gateway::network_service::interfaces::message_transfer::
     SomeipMessageTransferSkeleton;
-
+*/
 // Global flag to control application shutdown
 static std::atomic<bool> shutdown_requested{false};
+
+// Mutex to protect multiple client access (if needed)
+static std::mutex client_mutex;
 
 // Signal handler for graceful shutdown
 void termination_handler(int /*signal*/) {
@@ -66,104 +77,196 @@ int main(int argc, const char* argv[]) {
     std::signal(SIGTERM, termination_handler);
     std::signal(SIGINT, termination_handler);
 
-    score::mw::com::runtime::InitializeRuntime(argc, argv);
+    //  score::mw::com::runtime::InitializeRuntime(argc, argv);
 
     auto runtime = vsomeip::runtime::get();
     auto application = runtime->create_application(someipd_name);
     if (!application->init()) {
-        std::cerr << "App init failed";
+        std::cerr << "App init failed" << std::endl;
         return 1;
     }
 
     std::thread([application]() {
-        auto handles =
-            SomeipMessageTransferProxy::FindService(
-                score::mw::com::InstanceSpecifier::Create(std::string("someipd/gatewayd_messages"))
-                    .value())
-                .value();
+        /*     auto handles =
+                 SomeipMessageTransferProxy::FindService(
+                     score::mw::com::InstanceSpecifier::Create(std::string("someipd/gatewayd_messages"))
+                         .value())
+                     .value();
 
-        {  // Proxy for receiving messages from gatewayd to be sent via SOME/IP
-            auto proxy = SomeipMessageTransferProxy::Create(handles.front()).value();
-            proxy.message_.Subscribe(max_sample_count);
+             {  // Proxy for receiving messages from gatewayd to be sent via SOME/IP
+                 auto proxy = SomeipMessageTransferProxy::Create(handles.front()).value();
+                 proxy.message_.Subscribe(max_sample_count);
 
-            // Skeleton for transmitting messages from the network to gatewayd
-            auto create_result = SomeipMessageTransferSkeleton::Create(
-                score::mw::com::InstanceSpecifier::Create(std::string("someipd/someipd_messages"))
-                    .value());
-            // TODO: Error handling
-            auto skeleton = std::move(create_result).value();
-            (void)skeleton.OfferService();
+                 // Skeleton for transmitting messages from the network to gatewayd
+                 auto create_result = SomeipMessageTransferSkeleton::Create(
+                     score::mw::com::InstanceSpecifier::Create(std::string("someipd/someipd_messages"))
+                         .value());
+                 // TODO: Error handling
+                 auto skeleton = std::move(create_result).value();
+                 (void)skeleton.OfferService();
 
-            application->register_message_handler(
-                RESPONSE_SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID,
-                [&skeleton](const std::shared_ptr<vsomeip::message>& msg) {
-                    auto maybe_message = skeleton.message_.Allocate();
+                 application->register_message_handler(
+                     RESPONSE_SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID,
+     */
+        // -------------------------------
+        // Message handler for received events
+        // -------------------------------
+
+        application->register_message_handler(
+            SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID,
+            //  [&skeleton](const std::shared_ptr<vsomeip::message>& msg) {
+            [](const std::shared_ptr<vsomeip::message>& msg) {
+                std::lock_guard<std::mutex> lock(client_mutex);
+                /*    auto maybe_message = skeleton.message_.Allocate();
                     if (!maybe_message.has_value()) {
                         std::cerr << "Failed to allocate SOME/IP message:"
                                   << maybe_message.error().Message() << std::endl;
                         return;
                     }
+
                     auto message_sample = std::move(maybe_message).value();
                     memcpy(message_sample->data + VSOMEIP_FULL_HEADER_SIZE,
                            msg->get_payload()->get_data(), msg->get_payload()->get_length());
                     message_sample->size =
                         msg->get_payload()->get_length() + VSOMEIP_FULL_HEADER_SIZE;
-                    skeleton.message_.Send(std::move(message_sample));
+                    skeleton.message_.Send(std::move(message_sample));*/
+                std::cout << ">>> MESSAGE RECEIVED <<<" << std::endl;
+
+                auto data = msg->get_payload()->get_data();
+                auto len = msg->get_payload()->get_length();
+
+                std::cout << "Payload: ";
+                for (size_t i = 0; i < len; i++)
+                    std::cout << std::hex << static_cast<int>(data[i]) << " ";
+                std::cout << std::dec << std::endl;
+            });
+
+        // -------------------------------
+        // RBC handlers + subscriptions (table-driven)
+        // -------------------------------
+        struct RbcSignal {
+            vsomeip::service_t    service_id;
+            vsomeip::event_t      event_id;
+            vsomeip::eventgroup_t eventgroup_id;
+            const char*           label;
+            const char*           off_label;
+            const char*           on_label;
+        };
+
+        static const RbcSignal rbc_signals[] = {
+            {0x3003, 0x8002, 0x0002, "LOCK STATUS",   "Car Unlocked",     "Car Locked"      },
+            {0x3003, 0x8003, 0x0003, "HAZARD LAMP",   "Hazard lamp OFF",  "Hazard lamp ON"  },
+            {0x3003, 0x8004, 0x0004, "POSITION LAMP", "Position lamp OFF","Position lamp ON"},
+            {0x3004, 0x8009, 0x0009, "APPROACH LAMP", "Approach lamp OFF","Approach lamp ON"},
+        };
+
+        for (const auto& sig : rbc_signals) {
+            application->register_message_handler(
+                sig.service_id, RBC_INSTANCE_ID, sig.event_id,
+                [sig](const std::shared_ptr<vsomeip::message>& msg) {
+                    std::lock_guard<std::mutex> lock(client_mutex);
+                    auto data = msg->get_payload()->get_data();
+                    auto len  = msg->get_payload()->get_length();
+                    std::cout << ">>> RBC " << sig.label << " RECEIVED <<<" << std::endl;
+                    if (len < 1) { std::cout << "Payload too short" << std::endl; return; }
+                    const uint8_t v = static_cast<uint8_t>(data[0]);
+                    std::cout << "Value: " << static_cast<int>(v) << " -> "
+                              << (v == 0 ? sig.off_label : sig.on_label) << std::endl;
                 });
-
-            application->request_service(RESPONSE_SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID);
-            std::set<vsomeip::eventgroup_t> its_groups;
-            its_groups.insert(SAMPLE_EVENTGROUP_ID);
-            application->request_event(RESPONSE_SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID,
-                                       SAMPLE_EVENT_ID, its_groups,
+            application->request_service(sig.service_id, RBC_INSTANCE_ID);
+            std::set<vsomeip::eventgroup_t> eg{sig.eventgroup_id};
+            application->request_event(sig.service_id, RBC_INSTANCE_ID, sig.event_id, eg,
                                        vsomeip::event_type_e::ET_EVENT);
-            application->subscribe(RESPONSE_SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID,
-                                   SAMPLE_EVENTGROUP_ID);
+            application->subscribe(sig.service_id, RBC_INSTANCE_ID, sig.eventgroup_id);
+        }
 
-            std::set<vsomeip::eventgroup_t> groups{SAMPLE_EVENTGROUP_ID};
-            application->offer_event(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID,
-                                     groups);
-            application->offer_service(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID);
+        // -------------------------------
+        // Service Discovery (SD) active
+        // -------------------------------
+        std::set<vsomeip::eventgroup_t> groups{SAMPLE_EVENTGROUP_ID};
 
-            // application->update_service_configuration(
-            //     SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, 12345u, true, true, true);
-            auto payload = vsomeip::runtime::get()->create_payload();
+        // Offer own service → SD advertises this service to network
+        application->offer_service(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID);
 
-            std::cout << "SOME/IP daemon started, waiting for messages..." << std::endl;
+        // Offer an event → makes it discoverable
+        application->offer_event(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID, groups);
 
-            // Process messages until shutdown is requested
-            while (!shutdown_requested.load()) {
-                // TODO: Use ReceiveHandler + async runtime instead of polling
-                proxy.message_.GetNewSamples(
-                    [&](auto message_sample) {
-                        // TODO: Check if size is larger than capacity of data
-                        score::cpp::span<const std::byte> message(message_sample->data,
-                                                                  message_sample->size);
+        // Request own service/event → triggers SD discovery for remote services
+        application->request_service(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID);
+        application->request_event(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID, groups,
+                                   vsomeip::event_type_e::ET_EVENT);
 
-                        // Check if sample size is valid and contains at least a SOME/IP header
-                        if (message.size() < VSOMEIP_FULL_HEADER_SIZE) {
-                            std::cerr << "Received too small sample (size: " << message.size()
-                                      << ", expected at least: " << VSOMEIP_FULL_HEADER_SIZE
-                                      << "). Skipping message." << std::endl;
-                            return;
-                        }
+        // Subscribe to event group → uses SD to manage subscriptions
+        application->subscribe(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENTGROUP_ID);
 
-                        // TODO: Here we need to find a better way how to pass the message to
-                        // vsomeip. There doesn't seem to be a public way to just wrap the existing
-                        // buffer.
-                        auto payload_data = message.subspan(VSOMEIP_FULL_HEADER_SIZE);
-                        payload->set_data(
-                            reinterpret_cast<const vsomeip_v3::byte_t*>(payload_data.data()),
-                            payload_data.size());
-                        application->notify(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID,
-                                            payload);
-                    },
-                    max_sample_count);
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // std::set<vsomeip::eventgroup_t> its_groups;
+        // its_groups.insert(SAMPLE_EVENTGROUP_ID);
+
+        // Prepare payload
+        auto payload = vsomeip::runtime::get()->create_payload();
+        size_t event_count = 0;
+
+        //     std::cout << "SOME/IP daemon started, waiting for messages..." << std::endl;
+        std::cout << "SOME/IP daemon started..." << std::endl;
+
+        //    size_t event_count = 0;
+        // const size_t max_events = 10; // Number of events to send
+        while (!shutdown_requested.load()) {
+            //     if (event_count < max_events) {
+            // TODO: Use ReceiveHandler + async runtime instead of polling
+            // static bool sent = false;
+
+            std::vector<vsomeip::byte_t> test_data = {
+                static_cast<vsomeip::byte_t>(0x11 + (event_count % 256)), 0x22, 0x33, 0x44};
+            payload->set_data(test_data);
+
+            std::cout << "Sending test SOME/IP event #" << event_count << std::endl;
+
+            // Notify all subscribers
+            {
+                std::lock_guard<std::mutex> lock(client_mutex);
+                application->notify(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID,
+                                    payload);
             }
 
-            std::cout << "Shutting down SOME/IP daemon..." << std::endl;
+            event_count++;
+            //     }
+
+            /*
+                    proxy.message_.GetNewSamples(
+                        [&](auto message_sample) {
+                std::cout << ">>> MESSAGE RECEIVED <<<" << std::endl;
+                            },/*
+                            // TODO: Check if size is larger than capacity of data
+                            score::cpp::span<const std::byte> message(message_sample->data,
+                                                                      message_sample->size);
+
+                            // Check if sample size is valid and contains at least a SOME/IP header
+                            if (message.size() < VSOMEIP_FULL_HEADER_SIZE) {
+                                std::cerr << "Received too small sample (size: " << message.size()
+                                          << ", expected at least: " << VSOMEIP_FULL_HEADER_SIZE
+                                          << "). Skipping message." << std::endl;
+                                return;
+                            }
+
+                            // TODO: Here we need to find a better way how to pass the message to
+                            // vsomeip. There doesn't seem to be a public way to just wrap the
+               existing
+                            // buffer.
+                            auto payload_data = message.subspan(VSOMEIP_FULL_HEADER_SIZE);
+                            payload->set_data(
+                                reinterpret_cast<const vsomeip_v3::byte_t*>(payload_data.data()),
+                                payload_data.size());
+                            application->notify(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID,
+               SAMPLE_EVENT_ID, payload);
+                        },
+                        max_sample_count);
+            */
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
+
+        std::cout << "Shutting down SOME/IP daemon..." << std::endl;
+        //     }
 
         application->stop();
     }).detach();

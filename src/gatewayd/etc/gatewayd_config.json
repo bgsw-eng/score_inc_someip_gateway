@@ -25,6 +25,38 @@
                     "event_name": "echo_response_tiny"
                 }
             ]
+        },
+        {
+            "instance_specifier": "gatewayd/application_rbc_lock_status",
+            "events": [
+                {
+                    "event_name": "car_lock_unlock_status"
+                }
+            ]
+        },
+        {
+            "instance_specifier": "gatewayd/application_rbc_hazard_lamp_status",
+            "events": [
+                {
+                    "event_name": "mu1_reserved02"
+                }
+            ]
+        },
+        {
+            "instance_specifier": "gatewayd/application_rbc_position_lamp_status",
+            "events": [
+                {
+                    "event_name": "mu1_reserved03"
+                }
+            ]
+        },
+        {
+            "instance_specifier": "gatewayd/application_rbc_approach_lamp_status",
+            "events": [
+                {
+                    "event_name": "mu2_reserved01"
+                }
+            ]
         }
     ]
 }

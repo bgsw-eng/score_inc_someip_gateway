@@ -114,6 +114,82 @@
           ]
         }
       ]
+    },
+    {
+      "serviceTypeName": "/rbc/CarLockUnlockStatus",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7500,
+          "events": [
+            {
+              "eventName": "car_lock_unlock_status",
+              "eventId": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "serviceTypeName": "/rbc/HazardLampStatus",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7501,
+          "events": [
+            {
+              "eventName": "mu1_reserved02",
+              "eventId": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "serviceTypeName": "/rbc/PositionLampStatus",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7502,
+          "events": [
+            {
+              "eventName": "mu1_reserved03",
+              "eventId": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "serviceTypeName": "/rbc/ApproachLampStatus",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7503,
+          "events": [
+            {
+              "eventName": "mu2_reserved01",
+              "eventId": 0
+            }
+          ]
+        }
+      ]
     }
   ],
   "serviceInstances": [
@@ -267,6 +343,94 @@
             },
             {
               "eventName": "echo_response_xxlarge",
+              "numberOfSampleSlots": 10,
+              "maxSubscribers": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "instanceSpecifier": "gatewayd/application_rbc_lock_status",
+      "serviceTypeName": "/rbc/CarLockUnlockStatus",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 2000,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "car_lock_unlock_status",
+              "numberOfSampleSlots": 10,
+              "maxSubscribers": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "instanceSpecifier": "gatewayd/application_rbc_hazard_lamp_status",
+      "serviceTypeName": "/rbc/HazardLampStatus",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 2001,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "mu1_reserved02",
+              "numberOfSampleSlots": 10,
+              "maxSubscribers": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "instanceSpecifier": "gatewayd/application_rbc_position_lamp_status",
+      "serviceTypeName": "/rbc/PositionLampStatus",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 2002,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "mu1_reserved03",
+              "numberOfSampleSlots": 10,
+              "maxSubscribers": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "instanceSpecifier": "gatewayd/application_rbc_approach_lamp_status",
+      "serviceTypeName": "/rbc/ApproachLampStatus",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 2003,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "mu2_reserved01",
               "numberOfSampleSlots": 10,
               "maxSubscribers": 3
             }

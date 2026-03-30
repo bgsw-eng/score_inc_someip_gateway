@@ -29,6 +29,64 @@
                     ]
                 }
             ]
+        },
+        {
+            "service": "0x3003",
+            "instance": "0x0001",
+            "unreliable": "31001",
+            "events": [
+                {
+                    "event": "0x8002",
+                    "is_field": "false"
+                },
+                {
+                    "event": "0x8003",
+                    "is_field": "false"
+                },
+                {
+                    "event": "0x8004",
+                    "is_field": "false"
+                }
+            ],
+            "eventgroups": [
+                {
+                    "eventgroup": "0x0002",
+                    "events": [
+                        "0x8002"
+                    ]
+                },
+                {
+                    "eventgroup": "0x0003",
+                    "events": [
+                        "0x8003"
+                    ]
+                },
+                {
+                    "eventgroup": "0x0004",
+                    "events": [
+                        "0x8004"
+                    ]
+                }
+            ]
+        },
+        {
+            "service": "0x3004",
+            "instance": "0x0001",
+            "unreliable": "31002",
+            "events": [
+                {
+                    "event": "0x8009",
+                    "is_field": "false"
+                }
+            ],
+            "eventgroups": [
+                {
+                    "eventgroup": "0x0009",
+                    "events": [
+                        "0x8009"
+                    ]
+                }
+            ]
         }
     ],
     "routing": "sample_client",

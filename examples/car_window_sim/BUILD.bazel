@@ -22,7 +22,9 @@ cc_library(
     hdrs = [
         "src/car_window_types.h",
     ],
+    copts = ["-fPIC"],
     features = COMPILER_WARNING_FEATURES,
+    linkopts = ["-latomic"],
     visibility = ["//visibility:public"],
     deps = [
         "@score_baselibs//score/language/futurecpp",
@@ -33,11 +35,17 @@ cc_library(
 cc_library(
     name = "car_window_types_ipc_gen_cpp",
     srcs = ["src/car_window_types_ipc_gen.cpp"],
+    copts = ["-mno-outline-atomics"],
     features = COMPILER_WARNING_FEATURES,
     implementation_deps = [
         ":car_window_types_cpp",
         "@score_communication//score/mw/com/impl/rust:bridge_macros",
     ],
+    # Link options
+    linkopts = [
+        "-latomic",  # Required for atomic operations
+    ],
+    visibility = ["//visibility:public"],  # Optional: make it visible to other targets
 )
 
 rust_library(
@@ -50,36 +58,85 @@ rust_library(
     ],
 )
 
-rust_binary(
-    name = "car_window",
-    srcs = ["src/car_window.rs"],
-    data = ["config/mw_com_config.json"],
-    features = ["link_std_cpp_lib"],
-    rustc_flags = ["-Clink-arg=-lstdc++"],
-    visibility = ["//visibility:public"],
+cc_binary(
+    name = "car_window_cpp",
+    srcs = [
+        "src/car_window.cpp",
+    ],
+    copts = [
+        "-mno-outline-atomics",
+    ],
+    data = [
+        "config/logging.json",
+        "config/mw_com_config.json",
+    ],
+    features = COMPILER_WARNING_FEATURES,
+    includes = ["src"],
+    linkopts = [
+        "-latomic",
+    ],
     deps = [
-        ":car_window_types",
-        "@score_communication//score/mw/com/impl/rust:mw_com",
+        ":car_window_types_cpp",
+        "@score_baselibs//score/language/futurecpp",
+        "@score_communication//score/mw/com",
     ],
 )
 
-rust_binary(
-    name = "car_window_controller",
-    srcs = ["src/car_window_controller.rs"],
-    data = ["config/mw_com_config.json"],
-    features = ["link_std_cpp_lib"],
-    proc_macro_deps = [
-        "@car_window_sim_crate//:async-trait",
+#rust_binary(
+#    name = "car_window",
+#    srcs = ["src/car_window.rs"],
+#    data = ["config/mw_com_config.json"],
+#    features = ["link_std_cpp_lib"],
+#    rustc_flags = ["-Clink-arg=-lstdc++"],
+#    visibility = ["//visibility:public"],
+#    deps = [
+#        ":car_window_types",
+#        "@score_communication//score/mw/com/impl/rust:mw_com",
+#    ],
+#)
+
+cc_binary(
+    name = "car_window_controller_cpp",
+    srcs = [
+        "src/car_window_controller.cpp",
     ],
-    rustc_flags = [
-        "-Clink-arg=-lstdc++",
-        "-Clink-arg=-lm",
+    copts = [
+        "-mno-outline-atomics",
     ],
-    visibility = ["//visibility:public"],
+    data = [
+        "config/logging.json",
+        "config/mw_com_config.json",
+    ],
+    features = COMPILER_WARNING_FEATURES,
+    includes = ["src"],
+    linkopts = [
+        "-latomic",
+    ],
     deps = [
-        ":car_window_types",
-        "@car_window_sim_crate//:anyhow",
-        "@score_baselibs//score/mw/log",
-        "@score_communication//score/mw/com/impl/rust:mw_com",
+        ":car_window_types_cpp",
+        # If you need the bridge exports at link-time, uncomment this line:
+        # ":car_window_types_ipc_gen_cpp",
+        "@score_communication//score/mw/com",
+        "@score_baselibs//score/language/futurecpp",
     ],
 )
+#rust_binary(
+#    name = "car_window_controller",
+#    srcs = ["src/car_window_controller.rs"],
+#    data = ["config/mw_com_config.json"],
+#    features = ["link_std_cpp_lib"],
+#    proc_macro_deps = [
+#        "@car_window_sim_crate//:async-trait",
+#    ],
+#    rustc_flags = [
+#        "-Clink-arg=-lstdc++",
+#        "-Clink-arg=-lm",
+#    ],
+#    visibility = ["//visibility:public"],
+#    deps = [
+#        ":car_window_types",
+#        "@car_window_sim_crate//:anyhow",
+#        "@score_baselibs//score/mw/log",
+#        "@score_communication//score/mw/com/impl/rust:mw_com",
+#    ],
+#)

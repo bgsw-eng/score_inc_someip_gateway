@@ -16,6 +16,11 @@
 #include <set>
 #include <vsomeip/vsomeip.hpp>
 
+// ---------------------------------------------------------------------------
+// Mode selection: build with --define canoe_mode=true to use CANoe-ARC values.
+// Default (no flag) keeps the existing hardcoded values.
+// ---------------------------------------------------------------------------
+// ---- SOME/IP service identifiers ----
 #define SAMPLE_SERVICE_ID 0x1234
 #define RESPONSE_SAMPLE_SERVICE_ID 0x4321
 #define SAMPLE_INSTANCE_ID 0x5678

@@ -1,11 +1,11 @@
 {
-    "unicast": "192.168.87.2",
+    "unicast": "169.254.129.102",
     "logging": {
         "level": "debug",
-        "console": "true",
+        "console": "false",
         "file": {
-            "enable": "false",
-            "path": "/var/log/vsomeip.log"
+            "enable": "true",
+            "path": "/tmp/vsomeip_someipd.log"
         },
         "dlt": "false"
     },
@@ -13,6 +13,18 @@
         {
             "name": "someipd",
             "id": "0x0100"
+        }
+    ],
+    "clients": [
+        {
+            "unreliable_remote_ports": {
+                "first": "4000",
+                "last": "4000"
+            },
+            "unreliable_client_ports": {
+                "first": "4001",
+                "last": "4001"
+            }
         }
     ],
     "services": [
@@ -34,78 +46,20 @@
                     ]
                 }
             ]
-        },
-        {
-            "service": "0x3003",
-            "instance": "0x0001",
-            "unreliable": "31001",
-            "events": [
-                {
-                    "event": "0x8002",
-                    "is_field": "false"
-                },
-                {
-                    "event": "0x8003",
-                    "is_field": "false"
-                },
-                {
-                    "event": "0x8004",
-                    "is_field": "false"
-                }
-            ],
-            "eventgroups": [
-                {
-                    "eventgroup": "0x0002",
-                    "events": [
-                        "0x8002"
-                    ]
-                },
-                {
-                    "eventgroup": "0x0003",
-                    "events": [
-                        "0x8003"
-                    ]
-                },
-                {
-                    "eventgroup": "0x0004",
-                    "events": [
-                        "0x8004"
-                    ]
-                }
-            ]
-        },
-        {
-            "service": "0x3004",
-            "instance": "0x0001",
-            "unreliable": "31002",
-            "events": [
-                {
-                    "event": "0x8009",
-                    "is_field": "false"
-                }
-            ],
-            "eventgroups": [
-                {
-                    "eventgroup": "0x0009",
-                    "events": [
-                        "0x8009"
-                    ]
-                }
-            ]
         }
     ],
-    "routing": "someipd",
+    "routing": "VSSService",
     "service-discovery": {
         "enable": "true",
-        "multicast": "224.244.224.245",
+        "multicast": "224.0.0.10",
         "port": "30490",
         "protocol": "udp",
-        "initial_delay_min": "10",
-        "initial_delay_max": "100",
-        "repetitions_base_delay": "200",
-        "repetitions_max": "3",
-        "ttl": "3",
-        "cyclic_offer_delay": "2000",
-        "request_response_delay": "1500"
+        "initial_delay_min": "0",
+        "initial_delay_max": "0",
+        "repetitions_base_delay": "100",
+        "repetitions_max": "5",
+        "ttl": "4",
+        "cyclic_offer_delay": "3000",
+        "request_response_delay": "0"
     }
 }

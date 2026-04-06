@@ -14,6 +14,7 @@
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -30,27 +31,25 @@ const char* someipd_name = "someipd";
 
 static const vsomeip::service_t service_id = 0x1111;
 static const vsomeip::instance_t service_instance_id = 0x2222;
-static const vsomeip::service_t SAMPLE_SERVICE_ID = 0x1234;
-static const vsomeip::instance_t SAMPLE_INSTANCE_ID = 0x5678;
 static const vsomeip::method_t service_method_id = 0x3333;
-static const vsomeip::event_t SAMPLE_EVENT_ID = 0x8778;
-static const vsomeip::eventgroup_t SAMPLE_EVENTGROUP_ID = 0x4465;
 static const std::size_t max_sample_count = 10;
 
 // RBC (READ only) — signal table driven, see rbc_signals[] in main()
 static const vsomeip::instance_t RBC_INSTANCE_ID = 0x0001;
 
+// ---------------------------------------------------------------------------
+// Mode selection: build with --define canoe_mode=true to use CANoe-ARC values.
+// Default (no flag) keeps the existing hardcoded values.
+// ---------------------------------------------------------------------------
+// ---- SOME/IP service identifiers ----
 #define SAMPLE_SERVICE_ID 0x1234
 #define RESPONSE_SAMPLE_SERVICE_ID 0x4321
 #define SAMPLE_INSTANCE_ID 0x5678
 #define SAMPLE_METHOD_ID 0x0421
-
 #define SAMPLE_EVENT_ID 0x8778
 #define SAMPLE_GET_METHOD_ID 0x0001
 #define SAMPLE_SET_METHOD_ID 0x0002
-
 #define SAMPLE_EVENTGROUP_ID 0x4465
-
 #define OTHER_SAMPLE_SERVICE_ID 0x0248
 #define OTHER_SAMPLE_INSTANCE_ID 0x5422
 #define OTHER_SAMPLE_METHOD_ID 0x1421
@@ -130,47 +129,60 @@ int main(int argc, const char* argv[]) {
                     message_sample->size =
                         msg->get_payload()->get_length() + VSOMEIP_FULL_HEADER_SIZE;
                     skeleton.message_.Send(std::move(message_sample));*/
-                std::cout << ">>> MESSAGE RECEIVED <<<" << std::endl;
-
-                auto data = msg->get_payload()->get_data();
-                auto len = msg->get_payload()->get_length();
-
-                std::cout << "Payload: ";
-                for (size_t i = 0; i < len; i++)
-                    std::cout << std::hex << static_cast<int>(data[i]) << " ";
-                std::cout << std::dec << std::endl;
+                // Internal loopback test event — suppress output
+                (void)msg;
             });
 
         // -------------------------------
         // RBC handlers + subscriptions (table-driven)
         // -------------------------------
         struct RbcSignal {
-            vsomeip::service_t    service_id;
-            vsomeip::event_t      event_id;
+            vsomeip::service_t service_id;
+            vsomeip::event_t event_id;
             vsomeip::eventgroup_t eventgroup_id;
-            const char*           label;
-            const char*           off_label;
-            const char*           on_label;
+            const char* label;
+            const char* off_label;
+            const char* on_label;
         };
 
         static const RbcSignal rbc_signals[] = {
-            {0x3003, 0x8002, 0x0002, "LOCK STATUS",   "Car Unlocked",     "Car Locked"      },
-            {0x3003, 0x8003, 0x0003, "HAZARD LAMP",   "Hazard lamp OFF",  "Hazard lamp ON"  },
-            {0x3003, 0x8004, 0x0004, "POSITION LAMP", "Position lamp OFF","Position lamp ON"},
-            {0x3004, 0x8009, 0x0009, "APPROACH LAMP", "Approach lamp OFF","Approach lamp ON"},
+            {0x3003, 0x8002, 0x0002, "LOCK STATUS", "Car Unlocked", "Car Locked"},
+            {0x3003, 0x8003, 0x0003, "HAZARD LAMP", "Hazard lamp OFF", "Hazard lamp ON"},
+            {0x3003, 0x8004, 0x0004, "POSITION LAMP", "Position lamp OFF", "Position lamp ON"},
+            {0x3004, 0x8009, 0x0009, "APPROACH LAMP", "Approach lamp OFF", "Approach lamp ON"},
         };
 
-        for (const auto& sig : rbc_signals) {
+        // Track last received value per RBC signal (-1 = not yet received)
+        static std::array<int, std::size(rbc_signals)> rbc_last_value;
+        rbc_last_value.fill(-1);
+
+        for (std::size_t sig_idx = 0; sig_idx < std::size(rbc_signals); ++sig_idx) {
+            const auto& sig = rbc_signals[sig_idx];
             application->register_message_handler(
                 sig.service_id, RBC_INSTANCE_ID, sig.event_id,
-                [sig](const std::shared_ptr<vsomeip::message>& msg) {
+                [sig, sig_idx](const std::shared_ptr<vsomeip::message>& msg) {
                     std::lock_guard<std::mutex> lock(client_mutex);
                     auto data = msg->get_payload()->get_data();
-                    auto len  = msg->get_payload()->get_length();
-                    std::cout << ">>> RBC " << sig.label << " RECEIVED <<<" << std::endl;
-                    if (len < 1) { std::cout << "Payload too short" << std::endl; return; }
-                    const uint8_t v = static_cast<uint8_t>(data[0]);
-                    std::cout << "Value: " << static_cast<int>(v) << " -> "
+                    auto len = msg->get_payload()->get_length();
+                    if (len < 1) {
+                        std::cout << ">>> RBC " << sig.label << ": Payload too short" << std::endl;
+                        return;
+                    }
+                    const int v = static_cast<uint8_t>(data[0]);
+                    // Only print when value has changed
+                    if (v == rbc_last_value[sig_idx]) {
+                        return;
+                    }
+                    rbc_last_value[sig_idx] = v;
+                    std::cout << ">>> RBC " << sig.label << " CHANGED <<<"
+                              << " [service=0x" << std::hex << sig.service_id
+                              << " event=0x" << sig.event_id << std::dec << "]" << std::endl;
+                    std::cout << "Raw payload (" << len << " byte(s)): ";
+                    for (vsomeip::length_t i = 0; i < len; i++)
+                        std::cout << std::hex << std::setw(2) << std::setfill('0')
+                                  << static_cast<int>(data[i]) << " ";
+                    std::cout << std::dec << std::endl;
+                    std::cout << "Value: " << v << " -> "
                               << (v == 0 ? sig.off_label : sig.on_label) << std::endl;
                 });
             application->request_service(sig.service_id, RBC_INSTANCE_ID);
@@ -220,7 +232,7 @@ int main(int argc, const char* argv[]) {
                 static_cast<vsomeip::byte_t>(0x11 + (event_count % 256)), 0x22, 0x33, 0x44};
             payload->set_data(test_data);
 
-            std::cout << "Sending test SOME/IP event #" << event_count << std::endl;
+            // std::cout << "Sending test SOME/IP event #" << event_count << std::endl;
 
             // Notify all subscribers
             {

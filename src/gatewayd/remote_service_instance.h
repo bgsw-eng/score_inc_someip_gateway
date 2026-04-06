@@ -15,20 +15,26 @@
 #define SRC_GATEWAYD_REMOTE_SERVICE_INSTANCE
 
 #include <memory>
+#include <variant>
 #include <vector>
 
 #include "score/mw/com/types.h"
 #include "src/gatewayd/gatewayd_config_generated.h"
 #include "src/network_service/interfaces/message_transfer.h"
-#include "tests/benchmarks/echo_service.h"
+#include "src/rbc/car_lock_unlock_service.h"
+#include "tests/performance_benchmarks/echo_service.h"
 
 namespace score::someip_gateway::gatewayd {
 
 class RemoteServiceInstance {
    public:
+    using IpcSkeleton =
+        std::variant<echo_service::EchoResponseSkeleton, rbc_service::CarLockUnlockStatusSkeleton,
+                     rbc_service::HazardLampStatusSkeleton, rbc_service::PositionLampStatusSkeleton,
+                     rbc_service::ApproachLampStatusSkeleton>;
+
     RemoteServiceInstance(std::shared_ptr<const config::ServiceInstance> service_instance_config,
-                          // TODO: Use something generic (template)?
-                          echo_service::EchoResponseSkeleton&& ipc_skeleton,
+                          IpcSkeleton&& ipc_skeleton,
                           network_service::interfaces::message_transfer::SomeipMessageTransferProxy
                               someip_message_proxy);
 
@@ -43,7 +49,7 @@ class RemoteServiceInstance {
 
    private:
     std::shared_ptr<const config::ServiceInstance> service_instance_config_;
-    echo_service::EchoResponseSkeleton ipc_skeleton_;
+    IpcSkeleton ipc_skeleton_;
     network_service::interfaces::message_transfer::SomeipMessageTransferProxy someip_message_proxy_;
 };
 }  // namespace score::someip_gateway::gatewayd

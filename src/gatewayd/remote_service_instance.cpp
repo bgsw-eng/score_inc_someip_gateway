@@ -15,6 +15,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <type_traits>
 
 #include "score/mw/com/types.h"
 
@@ -30,13 +31,12 @@ static const std::size_t SOMEIP_FULL_HEADER_SIZE = 16;
 
 RemoteServiceInstance::RemoteServiceInstance(
     std::shared_ptr<const config::ServiceInstance> service_instance_config,
-    echo_service::EchoResponseSkeleton&& ipc_skeleton,
-    SomeipMessageTransferProxy someip_message_proxy)
+    IpcSkeleton&& ipc_skeleton, SomeipMessageTransferProxy someip_message_proxy)
     : service_instance_config_(std::move(service_instance_config)),
       ipc_skeleton_(std::move(ipc_skeleton)),
       someip_message_proxy_(std::move(someip_message_proxy)) {
     // TODO: Error handling
-    (void)ipc_skeleton_.OfferService();
+    std::visit([](auto& skel) { (void)skel.OfferService(); }, ipc_skeleton_);
 
     // TODO: This should be dispatched centrally
     someip_message_proxy_.message_.SetReceiveHandler([this]() {
@@ -53,19 +53,40 @@ RemoteServiceInstance::RemoteServiceInstance(
                 // TODO: Check service id, method id, etc. Maybe do that in the dispatcher already?
                 auto payload = message.subspan(SOMEIP_FULL_HEADER_SIZE);
 
-                auto maybe_sample = ipc_skeleton_.echo_response_tiny_.Allocate();
-                if (!maybe_sample.has_value()) {
-                    std::cerr << "Failed to allocate SOME/IP message:"
-                              << maybe_sample.error().Message() << std::endl;
-                    return;
-                }
-                auto sample = std::move(maybe_sample).value();
-
                 // TODO: deserialization
-                std::memcpy(sample.Get(), payload.data(),
-                            std::min(sizeof(echo_service::EchoResponseTiny), payload.size()));
-
-                ipc_skeleton_.echo_response_tiny_.Send(std::move(sample));
+                std::visit(
+                    [payload](auto& skel) {
+                        using SkeletonT = std::decay_t<decltype(skel)>;
+                        if constexpr (std::is_same_v<SkeletonT,
+                                                     echo_service::EchoResponseSkeleton>) {
+                            auto maybe_sample = skel.echo_response_tiny_.Allocate();
+                            if (!maybe_sample.has_value()) {
+                                std::cerr << "Failed to allocate SOME/IP message:"
+                                          << maybe_sample.error().Message() << std::endl;
+                                return;
+                            }
+                            auto sample = std::move(maybe_sample).value();
+                            std::memcpy(
+                                sample.Get(), payload.data(),
+                                std::min(sizeof(echo_service::EchoResponseTiny), payload.size()));
+                            skel.echo_response_tiny_.Send(std::move(sample));
+                        } else {
+                            // Generic path: all RBC single-event skeletons expose
+                            // a uniform `event_` member via DEFINE_RBC_SINGLE_EVENT_SERVICE.
+                            auto maybe_sample = skel.event_.Allocate();
+                            if (!maybe_sample.has_value()) {
+                                std::cerr << "Failed to allocate SOME/IP message:"
+                                          << maybe_sample.error().Message() << std::endl;
+                                return;
+                            }
+                            auto sample = std::move(maybe_sample).value();
+                            using DataT = typename std::decay_t<decltype(*sample.Get())>;
+                            std::memcpy(sample.Get(), payload.data(),
+                                        std::min(sizeof(DataT), payload.size()));
+                            skel.event_.Send(std::move(sample));
+                        }
+                    },
+                    ipc_skeleton_);
             },
             max_sample_count);
     });
@@ -76,11 +97,11 @@ RemoteServiceInstance::RemoteServiceInstance(
 namespace {
 struct FindServiceContext {
     std::shared_ptr<const config::ServiceInstance> config;
-    echo_service::EchoResponseSkeleton skeleton;
+    RemoteServiceInstance::IpcSkeleton skeleton;
     std::vector<std::unique_ptr<RemoteServiceInstance>>& instances;
 
     FindServiceContext(std::shared_ptr<const config::ServiceInstance> config_,
-                       echo_service::EchoResponseSkeleton&& skeleton_,
+                       RemoteServiceInstance::IpcSkeleton&& skeleton_,
                        std::vector<std::unique_ptr<RemoteServiceInstance>>& instances_)
         : config(std::move(config_)), skeleton(std::move(skeleton_)), instances(instances_) {}
 };
@@ -98,10 +119,20 @@ Result<mw::com::FindServiceHandle> RemoteServiceInstance::CreateAsyncRemoteServi
                                       service_instance_config->instance_specifier()->str())
                                       .value();
 
-    // TODO: Needs to be a generic Skeleton. Just for prototype showcase.
-    auto create_ipc_result = echo_service::EchoResponseSkeleton::Create(ipc_instance_specifier);
-    // TODO: Error handling
-    auto ipc_skeleton = std::move(create_ipc_result).value();
+    const std::string_view specifier = service_instance_config->instance_specifier()->string_view();
+    IpcSkeleton ipc_skeleton = [&]() -> IpcSkeleton {
+        if (specifier == "gatewayd/application_rbc_lock_status") {
+            return rbc_service::CarLockUnlockStatusSkeleton::Create(ipc_instance_specifier).value();
+        } else if (specifier == "gatewayd/application_rbc_hazard_lamp_status") {
+            return rbc_service::HazardLampStatusSkeleton::Create(ipc_instance_specifier).value();
+        } else if (specifier == "gatewayd/application_rbc_position_lamp_status") {
+            return rbc_service::PositionLampStatusSkeleton::Create(ipc_instance_specifier).value();
+        } else if (specifier == "gatewayd/application_rbc_approach_lamp_status") {
+            return rbc_service::ApproachLampStatusSkeleton::Create(ipc_instance_specifier).value();
+        }
+        // TODO: Error handling
+        return echo_service::EchoResponseSkeleton::Create(ipc_instance_specifier).value();
+    }();
 
     std::cout << "Starting discovery of remote service: "
               << service_instance_config->instance_specifier()->string_view() << "\n";

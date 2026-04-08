@@ -62,6 +62,10 @@ using score::someip_gateway::network_service::interfaces::message_transfer::
 // Global flag to control application shutdown
 static std::atomic<bool> shutdown_requested{false};
 
+// Guards to prevent spawning multiple subscribe threads when ON_AVAILABLE fires repeatedly
+static std::atomic<bool> rbc3003_subscribed{false};
+static std::atomic<bool> rbc3004_subscribed{false};
+
 // Mutex to protect multiple client access (if needed)
 static std::mutex client_mutex;
 
@@ -134,7 +138,39 @@ int main(int argc, const char* argv[]) {
             });
 
         // -------------------------------
-        // RBC handlers + subscriptions (table-driven)
+        // Re-subscribe to RBC services after every routing re-registration.
+        // VSSService (routing master) can drop subscribe requests during its
+        // BLOCKING CALL bursts; re-issuing on state change ensures recovery.
+        // -------------------------------
+        application->register_state_handler([application](vsomeip::state_type_e state) {
+            if (state == vsomeip::state_type_e::ST_REGISTERED) {
+                std::cout << ">>> Routing registered — re-requesting RBC services" << std::endl;
+                // request_service is called once in the for loop below.
+                // No duplicate calls here to avoid unbalanced ref-counts.
+            }
+        });
+
+        // -------------------------------
+        // Register events BEFORE availability handlers so that subscribe() calls
+        // inside the handlers find already-registered events and are not dropped.
+        // -------------------------------
+        {
+            std::set<vsomeip::eventgroup_t> eg2{0x0002};
+            application->request_event(0x3003, RBC_INSTANCE_ID, 0x8002, eg2,
+                                       vsomeip::event_type_e::ET_EVENT);
+            std::set<vsomeip::eventgroup_t> eg3{0x0003};
+            application->request_event(0x3003, RBC_INSTANCE_ID, 0x8003, eg3,
+                                       vsomeip::event_type_e::ET_EVENT);
+            std::set<vsomeip::eventgroup_t> eg4{0x0004};
+            application->request_event(0x3003, RBC_INSTANCE_ID, 0x8004, eg4,
+                                       vsomeip::event_type_e::ET_EVENT);
+            std::set<vsomeip::eventgroup_t> eg9{0x0009};
+            application->request_event(0x3004, RBC_INSTANCE_ID, 0x8009, eg9,
+                                       vsomeip::event_type_e::ET_EVENT);
+        }
+
+        // -------------------------------
+        // RBC signal table
         // -------------------------------
         struct RbcSignal {
             vsomeip::service_t service_id;
@@ -156,6 +192,11 @@ int main(int argc, const char* argv[]) {
         static std::array<int, std::size(rbc_signals)> rbc_last_value;
         rbc_last_value.fill(-1);
 
+        // -------------------------------
+        // Step 1 — Register ALL message handlers BEFORE availability handlers.
+        // This ensures no event can arrive in the window between on_available firing
+        // and the for loop registering later handlers (would be silently dropped).
+        // -------------------------------
         for (std::size_t sig_idx = 0; sig_idx < std::size(rbc_signals); ++sig_idx) {
             const auto& sig = rbc_signals[sig_idx];
             application->register_message_handler(
@@ -175,22 +216,67 @@ int main(int argc, const char* argv[]) {
                     }
                     rbc_last_value[sig_idx] = v;
                     std::cout << ">>> RBC " << sig.label << " CHANGED <<<"
-                              << " [service=0x" << std::hex << sig.service_id
-                              << " event=0x" << sig.event_id << std::dec << "]" << std::endl;
+                              << " [service=0x" << std::hex << sig.service_id << " event=0x"
+                              << sig.event_id << std::dec << "]" << std::endl;
                     std::cout << "Raw payload (" << len << " byte(s)): ";
                     for (vsomeip::length_t i = 0; i < len; i++)
                         std::cout << std::hex << std::setw(2) << std::setfill('0')
                                   << static_cast<int>(data[i]) << " ";
                     std::cout << std::dec << std::endl;
-                    std::cout << "Value: " << v << " -> "
-                              << (v == 0 ? sig.off_label : sig.on_label) << std::endl;
+                    std::cout << "Value: " << v << " -> " << (v == 0 ? sig.off_label : sig.on_label)
+                              << std::endl;
                 });
-            application->request_service(sig.service_id, RBC_INSTANCE_ID);
-            std::set<vsomeip::eventgroup_t> eg{sig.eventgroup_id};
-            application->request_event(sig.service_id, RBC_INSTANCE_ID, sig.event_id, eg,
-                                       vsomeip::event_type_e::ET_EVENT);
-            application->subscribe(sig.service_id, RBC_INSTANCE_ID, sig.eventgroup_id);
         }
+
+        // -------------------------------
+        // Step 2 — Register availability handlers. subscribe() is posted via a
+        // detached thread so it does not re-enter the vsomeip dispatch thread.
+        // All message handlers above are already registered at this point.
+        // -------------------------------
+        application->register_availability_handler(
+            0x3003, RBC_INSTANCE_ID,
+            [application](vsomeip::service_t svc, vsomeip::instance_t inst, bool available) {
+                if (available) {
+                    std::cout << ">>> RBC 0x3003 available — subscribing eg=0x2/3/4" << std::endl;
+                    if (rbc3003_subscribed.exchange(true)) {
+                        return;  // already subscribed, skip
+                    }
+                    std::thread([application, svc, inst]() {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        application->subscribe(svc, inst, 0x0002, 0x01);
+                        application->subscribe(svc, inst, 0x0003, 0x01);
+                        application->subscribe(svc, inst, 0x0004, 0x01);
+                    }).detach();
+                } else {
+                    std::cout << ">>> RBC 0x3003 unavailable" << std::endl;
+                    rbc3003_subscribed.store(false);
+                }
+            });
+
+        application->register_availability_handler(
+            0x3004, RBC_INSTANCE_ID,
+            [application](vsomeip::service_t svc, vsomeip::instance_t inst, bool available) {
+                if (available) {
+                    std::cout << ">>> RBC 0x3004 available — subscribing eg=0x9" << std::endl;
+                    if (rbc3004_subscribed.exchange(true)) {
+                        return;  // already subscribed, skip
+                    }
+                    std::thread([application, svc, inst]() {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        application->subscribe(svc, inst, 0x0009, 0x01);
+                    }).detach();
+                } else {
+                    std::cout << ">>> RBC 0x3004 unavailable" << std::endl;
+                    rbc3004_subscribed.store(false);
+                }
+            });
+
+        // -------------------------------
+        // Step 3 — request_service: triggers SD + availability callback → subscribe.
+        // Called once per unique service (not per signal) to avoid ref-count imbalance.
+        // -------------------------------
+        application->request_service(0x3003, RBC_INSTANCE_ID, 0x01);
+        application->request_service(0x3004, RBC_INSTANCE_ID, 0x01);
 
         // -------------------------------
         // Service Discovery (SD) active
@@ -221,8 +307,10 @@ int main(int argc, const char* argv[]) {
         //     std::cout << "SOME/IP daemon started, waiting for messages..." << std::endl;
         std::cout << "SOME/IP daemon started..." << std::endl;
 
-        //    size_t event_count = 0;
-        // const size_t max_events = 10; // Number of events to send
+        // Periodic re-subscribe counter: re-issue RBC subscribes every 2 seconds
+        // to recover from VSSService routing master drops (BLOCKING CALL bursts).
+        int resubscribe_tick = 0;
+
         while (!shutdown_requested.load()) {
             //     if (event_count < max_events) {
             // TODO: Use ReceiveHandler + async runtime instead of polling
@@ -235,13 +323,25 @@ int main(int argc, const char* argv[]) {
             // std::cout << "Sending test SOME/IP event #" << event_count << std::endl;
 
             // Notify all subscribers
-            {
-                std::lock_guard<std::mutex> lock(client_mutex);
-                application->notify(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID,
-                                    payload);
-            }
+            application->notify(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID,
+                                payload);
 
             event_count++;
+
+            // Every 4 ticks (2 seconds) re-issue RBC subscribes.
+            // unsubscribe first to reset ST_NOT_ACKNOWLEDGED so vsomeip
+            // re-sends the SD SubscribeEventgroup with a UDP endpoint option.
+            if (++resubscribe_tick % 4 == 0) {
+                application->unsubscribe(0x3003, RBC_INSTANCE_ID, 0x0002);
+                application->unsubscribe(0x3003, RBC_INSTANCE_ID, 0x0003);
+                application->unsubscribe(0x3003, RBC_INSTANCE_ID, 0x0004);
+                application->unsubscribe(0x3004, RBC_INSTANCE_ID, 0x0009);
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                application->subscribe(0x3003, RBC_INSTANCE_ID, 0x0002, 0x01);
+                application->subscribe(0x3003, RBC_INSTANCE_ID, 0x0003, 0x01);
+                application->subscribe(0x3003, RBC_INSTANCE_ID, 0x0004, 0x01);
+                application->subscribe(0x3004, RBC_INSTANCE_ID, 0x0009, 0x01);
+            }
             //     }
 
             /*

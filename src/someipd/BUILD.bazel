@@ -29,8 +29,12 @@ cc_binary(
         "$(rootpath etc/mw_com_config.json)",
     ],
     data = [
+        "etc/logging.json",
         "etc/mw_com_config.json",
     ],
+    env = {
+        "MW_LOG_CONFIG_FILE": "$(rootpath etc/logging.json)",
+    },
     visibility = ["//visibility:public"],
     deps = [
         "//src/network_service:provider",

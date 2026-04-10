@@ -118,7 +118,17 @@ native_binary(
         "$(rootpath etc/mw_com_config.json)",
     ],
     data = [
+        "etc/logging.json",
         "etc/mw_com_config.json",
         ":config_file",
     ],
+    env = {
+        "MW_LOG_CONFIG_FILE": "$(rootpath etc/logging.json)",
+    },
+)
+
+generate_someip_config_bin(
+    name = "gatewayd_config_bin",
+    json = "//src/gatewayd/etc:gatewayd_config.json",
+    output = "src/gatewayd/etc/gatewayd_config.bin",
 )

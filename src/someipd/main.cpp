@@ -23,7 +23,7 @@
 #include <vsomeip/primitive_types.hpp>
 #include <vsomeip/vsomeip.hpp>
 
-// #include "score/mw/com/runtime.h"
+#include "score/mw/com/runtime.h"
 #include "score/span.hpp"
 #include "src/network_service/interfaces/message_transfer.h"
 
@@ -54,11 +54,10 @@ static const vsomeip::instance_t RBC_INSTANCE_ID = 0x0001;
 #define OTHER_SAMPLE_INSTANCE_ID 0x5422
 #define OTHER_SAMPLE_METHOD_ID 0x1421
 
-/*using score::someip_gateway::network_service::interfaces::message_transfer::
+using score::someip_gateway::network_service::interfaces::message_transfer::
     SomeipMessageTransferProxy;
 using score::someip_gateway::network_service::interfaces::message_transfer::
     SomeipMessageTransferSkeleton;
-*/
 // Global flag to control application shutdown
 static std::atomic<bool> shutdown_requested{false};
 
@@ -80,7 +79,7 @@ int main(int argc, const char* argv[]) {
     std::signal(SIGTERM, termination_handler);
     std::signal(SIGINT, termination_handler);
 
-    //  score::mw::com::runtime::InitializeRuntime(argc, argv);
+    score::mw::com::runtime::InitializeRuntime(argc, argv);
 
     auto runtime = vsomeip::runtime::get();
     auto application = runtime->create_application(someipd_name);
@@ -192,6 +191,13 @@ int main(int argc, const char* argv[]) {
         static std::array<int, std::size(rbc_signals)> rbc_last_value;
         rbc_last_value.fill(-1);
 
+        // Create mw::com skeleton — publishes received RBC events to SHM for gatewayd
+        auto skeleton_result = SomeipMessageTransferSkeleton::Create(
+            score::mw::com::InstanceSpecifier::Create(std::string("someipd/someipd_messages"))
+                .value());
+        auto skeleton = std::move(skeleton_result).value();
+        (void)skeleton.OfferService();
+
         // -------------------------------
         // Step 1 — Register ALL message handlers BEFORE availability handlers.
         // This ensures no event can arrive in the window between on_available firing
@@ -201,8 +207,7 @@ int main(int argc, const char* argv[]) {
             const auto& sig = rbc_signals[sig_idx];
             application->register_message_handler(
                 sig.service_id, RBC_INSTANCE_ID, sig.event_id,
-                [sig, sig_idx](const std::shared_ptr<vsomeip::message>& msg) {
-                    std::lock_guard<std::mutex> lock(client_mutex);
+                [sig, sig_idx, &skeleton](const std::shared_ptr<vsomeip::message>& msg) {
                     auto data = msg->get_payload()->get_data();
                     auto len = msg->get_payload()->get_length();
                     if (len < 1) {
@@ -210,11 +215,16 @@ int main(int argc, const char* argv[]) {
                         return;
                     }
                     const int v = static_cast<uint8_t>(data[0]);
-                    // Only print when value has changed
-                    if (v == rbc_last_value[sig_idx]) {
-                        return;
+
+                    // Hold mutex only for last-value check/update — not during Send()
+                    {
+                        std::lock_guard<std::mutex> lock(client_mutex);
+                        if (v == rbc_last_value[sig_idx]) {
+                            return;
+                        }
+                        rbc_last_value[sig_idx] = v;
                     }
-                    rbc_last_value[sig_idx] = v;
+
                     std::cout << ">>> RBC " << sig.label << " CHANGED <<<"
                               << " [service=0x" << std::hex << sig.service_id << " event=0x"
                               << sig.event_id << std::dec << "]" << std::endl;
@@ -225,6 +235,51 @@ int main(int argc, const char* argv[]) {
                     std::cout << std::dec << std::endl;
                     std::cout << "Value: " << v << " -> " << (v == 0 ? sig.off_label : sig.on_label)
                               << std::endl;
+
+                    // Forward to mw::com skeleton with full 16-byte SOME/IP header
+                    // so gatewayd's remote_service_instance can parse it correctly.
+                    auto maybe_message = skeleton.message_.Allocate();
+                    if (maybe_message.has_value()) {
+                        auto message_sample = std::move(maybe_message).value();
+                        std::size_t pos = 0;
+                        // Bytes 0-1: Service ID
+                        message_sample->data[pos++] = static_cast<std::byte>(sig.service_id >> 8);
+                        message_sample->data[pos++] = static_cast<std::byte>(sig.service_id & 0xFF);
+                        // Bytes 2-3: Method/Event ID
+                        message_sample->data[pos++] = static_cast<std::byte>(sig.event_id >> 8);
+                        message_sample->data[pos++] = static_cast<std::byte>(sig.event_id & 0xFF);
+                        // Bytes 4-7: Length (payload length, 4 bytes big-endian)
+                        std::uint32_t payload_len =
+                            static_cast<std::uint32_t>(len) + 8U;  // header remainder
+                        message_sample->data[pos++] = static_cast<std::byte>(payload_len >> 24);
+                        message_sample->data[pos++] =
+                            static_cast<std::byte>((payload_len >> 16) & 0xFF);
+                        message_sample->data[pos++] =
+                            static_cast<std::byte>((payload_len >> 8) & 0xFF);
+                        message_sample->data[pos++] = static_cast<std::byte>(payload_len & 0xFF);
+                        // Bytes 8-9: Client ID
+                        message_sample->data[pos++] = static_cast<std::byte>(0x00);
+                        message_sample->data[pos++] = static_cast<std::byte>(0x00);
+                        // Bytes 10-11: Session ID
+                        message_sample->data[pos++] = static_cast<std::byte>(0x00);
+                        message_sample->data[pos++] = static_cast<std::byte>(0x01);
+                        // Byte 12: Protocol version
+                        message_sample->data[pos++] = static_cast<std::byte>(0x01);
+                        // Byte 13: Interface version (major)
+                        message_sample->data[pos++] = static_cast<std::byte>(0x01);
+                        // Byte 14: Message type (0x02 = NOTIFICATION)
+                        message_sample->data[pos++] = static_cast<std::byte>(0x02);
+                        // Byte 15: Return code
+                        message_sample->data[pos++] = static_cast<std::byte>(0x00);
+                        // Bytes 16+: Payload
+                        constexpr std::size_t MAX_SIZE = score::someip_gateway::network_service::
+                            interfaces::message_transfer::MAX_MESSAGE_SIZE;
+                        std::size_t copy_len =
+                            std::min(static_cast<std::size_t>(len), MAX_SIZE - pos);
+                        std::memcpy(&message_sample->data[pos], data, copy_len);
+                        message_sample->size = pos + copy_len;
+                        skeleton.message_.Send(std::move(message_sample));
+                    }
                 });
         }
 
@@ -323,8 +378,7 @@ int main(int argc, const char* argv[]) {
             // std::cout << "Sending test SOME/IP event #" << event_count << std::endl;
 
             // Notify all subscribers
-            application->notify(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID,
-                                payload);
+            application->notify(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID, payload);
 
             event_count++;
 

@@ -53,9 +53,24 @@ RemoteServiceInstance::RemoteServiceInstance(
                 // TODO: Check service id, method id, etc. Maybe do that in the dispatcher already?
                 auto payload = message.subspan(SOMEIP_FULL_HEADER_SIZE);
 
+                // Extract service/event IDs from header for logging
+                uint16_t svc_id =
+                    (static_cast<uint16_t>(message[0]) << 8) | static_cast<uint16_t>(message[1]);
+                uint16_t evt_id =
+                    (static_cast<uint16_t>(message[2]) << 8) | static_cast<uint16_t>(message[3]);
+                const char* signal_name = "UNKNOWN";
+                if (svc_id == 0x3003 && evt_id == 0x8002)
+                    signal_name = "LOCK STATUS";
+                else if (svc_id == 0x3003 && evt_id == 0x8003)
+                    signal_name = "HAZARD LAMP";
+                else if (svc_id == 0x3003 && evt_id == 0x8004)
+                    signal_name = "POSITION LAMP";
+                else if (svc_id == 0x3004 && evt_id == 0x8009)
+                    signal_name = "APPROACH LAMP";
+
                 // TODO: deserialization
                 std::visit(
-                    [payload](auto& skel) {
+                    [payload, signal_name](auto& skel) {
                         using SkeletonT = std::decay_t<decltype(skel)>;
                         if constexpr (std::is_same_v<SkeletonT,
                                                      echo_service::EchoResponseSkeleton>) {
@@ -83,6 +98,13 @@ RemoteServiceInstance::RemoteServiceInstance(
                             using DataT = typename std::decay_t<decltype(*sample.Get())>;
                             std::memcpy(sample.Get(), payload.data(),
                                         std::min(sizeof(DataT), payload.size()));
+                            std::cout
+                                << "[gatewayd] " << signal_name
+                                << " forwarded to IPC skeleton, value="
+                                << (payload.empty()
+                                        ? -1
+                                        : static_cast<int>(static_cast<uint8_t>(payload.data()[0])))
+                                << std::endl;
                             skel.event_.Send(std::move(sample));
                         }
                     },

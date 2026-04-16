@@ -14,7 +14,10 @@
 #include "remote_service_instance.h"
 
 #include <cstring>
+#include <fstream>
 #include <iostream>
+#include <map>
+#include <mutex>
 #include <type_traits>
 
 #include "score/mw/com/types.h"
@@ -28,6 +31,90 @@ using network_service::interfaces::message_transfer::SomeipMessageTransferProxy;
 
 static const std::size_t max_sample_count = 10;
 static const std::size_t SOMEIP_FULL_HEADER_SIZE = 16;
+
+// Shared state for RBC signals (thread-safe JSON file writing)
+static std::recursive_mutex rbc_signals_mutex;
+static std::map<std::string, uint32_t> rbc_signals_cache;
+
+// RBC signal mappings (received from SOME/IP, forwarded to IPC skeletons)
+// scoreApp reads these from /tmp/rbc_signals.json and writes to external databroker via Velocitas
+// SDK LOCK STATUS   (0x3003/0x8002) → MU1_Reserved_01 HAZARD LAMP   (0x3003/0x8003) →
+// MU1_Reserved_02 POSITION LAMP (0x3003/0x8004) → MU1_Reserved_03 APPROACH LAMP (0x3004/0x8009) →
+// MU2_Reserved01
+
+// Helper function to write RBC signals to JSON file (read by scoreApp)
+static void writeRbcSignalsJson() {
+    // Write all cached RBC signals to JSON file atomically
+    std::lock_guard<std::recursive_mutex> lock(rbc_signals_mutex);
+
+    // Build JSON string manually (avoids external dependencies)
+    std::string json = "{\n  \"rbc_signals\": {\n";
+    bool first = true;
+    for (const auto& [key, value] : rbc_signals_cache) {
+        if (!first) json += ",\n";
+        json += "    \"" + key + "\": " + std::to_string(value);
+        first = false;
+    }
+    json += "\n  }\n}\n";
+
+    // Write to temporary file, then atomic rename
+    const char* json_file = "/tmp/rbc_signals.json";
+    const char* tmp_file = "/tmp/rbc_signals.json.tmp";
+
+    std::ofstream out(tmp_file);
+    if (out.is_open()) {
+        out << json;
+        out.close();
+        // Atomic rename (mv on Linux is atomic)
+        rename(tmp_file, json_file);
+
+        std::cout << "[gatewayd-json] Updated " << json_file << " with " << rbc_signals_cache.size()
+                  << " signals" << std::endl;
+    } else {
+        std::cerr << "[gatewayd-json] Failed to write " << tmp_file << std::endl;
+    }
+}
+
+static void writeRbcToDatabroker(uint16_t svc_id, uint16_t evt_id,
+                                 const score::cpp::span<const std::byte>& payload,
+                                 const char* signal_name) {
+    // Extract value from SOME/IP payload (typically 1 byte)
+    if (payload.empty()) {
+        return;
+    }
+    uint32_t value = static_cast<uint32_t>(static_cast<uint8_t>(payload.data()[0]));
+    std::string vss_path;
+    std::string signal_key;
+
+    // Map SOME/IP service:event to signal key and VSS path
+    if (svc_id == 0x3003 && evt_id == 0x8002) {
+        signal_key = "LOCK_STATUS";
+        vss_path = "Vehicle.Powertrain.ElectricMotor.MU1_Reserved_01";
+    } else if (svc_id == 0x3003 && evt_id == 0x8003) {
+        signal_key = "HAZARD_LAMP";
+        vss_path = "Vehicle.Powertrain.ElectricMotor.MU1_Reserved_02";
+    } else if (svc_id == 0x3003 && evt_id == 0x8004) {
+        signal_key = "POSITION_LAMP";
+        vss_path = "Vehicle.Powertrain.ElectricMotor.MU1_Reserved_03";
+    } else if (svc_id == 0x3004 && evt_id == 0x8009) {
+        signal_key = "APPROACH_LAMP";
+        vss_path = "Vehicle.Powertrain.TractionBattery.DTE.MU2_Reserved01";
+    } else {
+        return;  // Not an RBC signal
+    }
+
+    // Update cache and write to JSON file
+    {
+        std::lock_guard<std::recursive_mutex> lock(rbc_signals_mutex);
+        bool changed = (rbc_signals_cache[signal_key] != value);
+        rbc_signals_cache[signal_key] = value;
+
+        std::cout << "[gatewayd] " << signal_name << " (" << vss_path << ") = " << value
+                  << std::endl;
+        // Always write full JSON to ensure scoreApp has all signals
+        writeRbcSignalsJson();
+    }
+}
 
 RemoteServiceInstance::RemoteServiceInstance(
     std::shared_ptr<const config::ServiceInstance> service_instance_config,
@@ -50,27 +137,38 @@ RemoteServiceInstance::RemoteServiceInstance(
                               << " bytes." << std::endl;
                     return;
                 }
-                // TODO: Check service id, method id, etc. Maybe do that in the dispatcher already?
-                auto payload = message.subspan(SOMEIP_FULL_HEADER_SIZE);
-
-                // Extract service/event IDs from header for logging
+                // Extract service/event IDs from header for filtering
                 uint16_t svc_id =
                     (static_cast<uint16_t>(message[0]) << 8) | static_cast<uint16_t>(message[1]);
                 uint16_t evt_id =
                     (static_cast<uint16_t>(message[2]) << 8) | static_cast<uint16_t>(message[3]);
+
+                // Filter: only process messages for RBC services (0x3003, 0x3004)
+                if (!((svc_id == 0x3003 &&
+                       (evt_id == 0x8002 || evt_id == 0x8003 || evt_id == 0x8004)) ||
+                      (svc_id == 0x3004 && evt_id == 0x8009))) {
+                    // Not an RBC message, skip processing
+                    return;
+                }
+
+                // TODO: Check service id, method id, etc. Maybe do that in the dispatcher already?
+                auto payload = message.subspan(SOMEIP_FULL_HEADER_SIZE);
+
                 const char* signal_name = "UNKNOWN";
-                if (svc_id == 0x3003 && evt_id == 0x8002)
+
+                if (svc_id == 0x3003 && evt_id == 0x8002) {
                     signal_name = "LOCK STATUS";
-                else if (svc_id == 0x3003 && evt_id == 0x8003)
+                } else if (svc_id == 0x3003 && evt_id == 0x8003) {
                     signal_name = "HAZARD LAMP";
-                else if (svc_id == 0x3003 && evt_id == 0x8004)
+                } else if (svc_id == 0x3003 && evt_id == 0x8004) {
                     signal_name = "POSITION LAMP";
-                else if (svc_id == 0x3004 && evt_id == 0x8009)
+                } else if (svc_id == 0x3004 && evt_id == 0x8009) {
                     signal_name = "APPROACH LAMP";
+                }
 
                 // TODO: deserialization
                 std::visit(
-                    [payload, signal_name](auto& skel) {
+                    [payload, signal_name, svc_id, evt_id](auto& skel) {
                         using SkeletonT = std::decay_t<decltype(skel)>;
                         if constexpr (std::is_same_v<SkeletonT,
                                                      echo_service::EchoResponseSkeleton>) {
@@ -106,6 +204,9 @@ RemoteServiceInstance::RemoteServiceInstance(
                                         : static_cast<int>(static_cast<uint8_t>(payload.data()[0])))
                                 << std::endl;
                             skel.event_.Send(std::move(sample));
+
+                            // Also write RBC signals directly to databroker for scoreApp
+                            writeRbcToDatabroker(svc_id, evt_id, payload, signal_name);
                         }
                     },
                     ipc_skeleton_);

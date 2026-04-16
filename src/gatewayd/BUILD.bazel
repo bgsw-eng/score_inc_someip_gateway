@@ -68,6 +68,19 @@ cc_library(
     ],
 )
 
+cc_shared_library(
+    name = "libremote_service_instance",
+    shared_lib_name = "libremote_service_instance.so",
+    visibility = ["//visibility:public"],
+    deps = [":remote_service_instance"],
+)
+
+cc_static_library(
+    name = "libremote_service_instance_static",
+    visibility = ["//visibility:public"],
+    deps = [":remote_service_instance"],
+)
+
 flatbuffer_cc_library(
     name = "config_flatbuffers",
     srcs = ["etc/gatewayd_config.fbs"],

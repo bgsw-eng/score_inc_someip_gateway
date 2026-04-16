@@ -231,7 +231,7 @@
             {
               "eventName": "message",
               "numberOfSampleSlots": 10,
-              "maxSubscribers": 1
+              "maxSubscribers": 8
             }
           ]
         }

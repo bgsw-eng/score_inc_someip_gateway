@@ -32,6 +32,12 @@ cc_library(
     ],
 )
 
+filegroup(
+    name = "public_headers",
+    srcs = ["src/car_window_types.h"],
+    visibility = ["//visibility:public"],
+)
+
 cc_library(
     name = "car_window_types_ipc_gen_cpp",
     srcs = ["src/car_window_types_ipc_gen.cpp"],
@@ -75,6 +81,7 @@ cc_binary(
     linkopts = [
         "-latomic",
     ],
+    visibility = ["//visibility:public"],
     deps = [
         ":car_window_types_cpp",
         "@score_baselibs//score/language/futurecpp",
@@ -112,6 +119,7 @@ cc_binary(
     linkopts = [
         "-latomic",
     ],
+    visibility = ["//visibility:public"],
     deps = [
         ":car_window_types_cpp",
         # If you need the bridge exports at link-time, uncomment this line:

@@ -16,6 +16,11 @@ module(
     version = "0.0.1",
 )
 
+local_path_override(
+    module_name = "score_crates",
+    path = "third_party/score_crates",
+)
+
 # ============================================================================
 # Python Configuration
 # ============================================================================
@@ -170,15 +175,22 @@ bazel_dep(name = "score_docs_as_code", version = "2.3.0", dev_dependency = True)
 # ============================================================================
 # Communication Framework
 # ============================================================================
-bazel_dep(name = "score_communication", version = "0.1.2")
+#bazel_dep(name = "score_communication", version = "0.1.2")
 
 # On aarch64 (ARM), C's char is unsigned (u8)
 # Fixed upstream on main by commit b9efce9702d108fd63be806738db50c14d354302
 # Opened problem report at: https://github.com/eclipse-score/communication/issues/172
-single_version_override(
+#single_version_override(
+#    module_name = "score_communication",
+#    patch_strip = 1,
+#    patches = ["//:third_party/score_communication-cchar.patch"],
+#)
+bazel_dep(name = "score_communication", version = "0.1.2")
+local_path_override(
     module_name = "score_communication",
-    patch_strip = 1,
-    patches = ["//:third_party/score_communication-cchar.patch"],
+    path = "/workspaces/score_communication",
+    #    patch_strip = 1,
+    #    patches = ["//:third_party/score_communication-cchar.patch"],
 )
 
 # ============================================================================
@@ -241,6 +253,8 @@ single_version_override(
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
+new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
+
 http_archive(
     name = "boost",
     build_file_content = """
@@ -251,20 +265,28 @@ filegroup(
 )
 """,
     patch_strip = 1,
-    patches = ["//:third_party/boost-asio_qnx.patch"],
-    sha256 = "7da75f171837577a52bbf217e17f8ea576c7c246e4594d617bfde7fafd408be5",
-    strip_prefix = "boost-1.87.0",
-    urls = ["https://github.com/boostorg/boost/releases/download/boost-1.87.0/boost-1.87.0-cmake.tar.xz"],
+    patches = ["//:third_party/boost-asio_qnx.patch"],  #
+    sha256 = "4d27e9efed0f6f152dc28db6430b9d3dfb40c0345da7342eaa5a987dde57bd95",
+    strip_prefix = "boost-1.84.0",
+    urls = ["https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.gz"],
 )
 
-http_archive(
+# Use local vsomeip copy for development
+new_local_repository(
     name = "vsomeip",
     build_file = "@//:third_party/vsomeip.BUILD.bazel",
-    integrity = "sha256-hMjkJs3fQ14MVtpwupfno/UbK+rxV+1zih9632bO5Sk=",
-    patch_strip = 1,
-    patches = ["//:third_party/vsomeip-qnx8.patch"],
-    strip_prefix = "vsomeip-3.6.1",
-    urls = [
-        "https://github.com/COVESA/vsomeip/archive/refs/tags/3.6.1.tar.gz",
-    ],
+    path = "/workspaces/vsomeip",
 )
+
+# Original http_archive configuration (commented out - using local copy above)
+# http_archive(
+#     name = "vsomeip",
+#     build_file = "@//:third_party/vsomeip.BUILD.bazel",
+#     integrity = "sha256-h4eGMHjtrW5FEIpEtLHGP+tQkBdA1zh+Dn2ePwWUjBs=",
+#     patch_strip = 1,
+#     patches = ["//:third_party/vsomeip-boost187.patch"],
+#     strip_prefix = "vsomeip-3.3.8",
+#     urls = [
+#         "https://github.com/COVESA/vsomeip/archive/refs/tags/3.3.8.tar.gz",
+#     ],
+# )

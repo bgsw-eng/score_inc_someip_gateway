@@ -1,0 +1,40 @@
+# *******************************************************************************
+# Copyright (c) 2025 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+# *******************************************************************************
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
+
+cc_library(
+    name = "car_lock_unlock_service",
+    hdrs = ["car_lock_unlock_service.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@score_communication//score/mw/com",
+    ],
+    alwayslink = True,
+)
+
+filegroup(
+    name = "public_headers",
+    srcs = ["car_lock_unlock_service.h"],
+    visibility = ["//visibility:public"],
+)
+
+# Shared library embedding mw_com runtime + RBC service headers.
+# Consumed by external CMake builds (e.g. Velocitas Vehicle App).
+cc_shared_library(
+    name = "libmwcom_rbc",
+    shared_lib_name = "libmwcom_rbc.so",
+    visibility = ["//visibility:public"],
+    deps = [":car_lock_unlock_service"],
+)

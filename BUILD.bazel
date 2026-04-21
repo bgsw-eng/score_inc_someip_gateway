@@ -20,6 +20,7 @@ load("//:project_config.bzl", "PROJECT_CONFIG")
 # Compliance & Licensing
 # ==============================================================================
 
+load("@score_someip_gateway//bazel/tools:someip_config.bzl", "generate_someip_config_bin")
 copyright_checker(
     name = "copyright",
     srcs = [

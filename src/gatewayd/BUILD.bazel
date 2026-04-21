@@ -63,7 +63,8 @@ cc_library(
     deps = [
         ":config_flatbuffers",
         "//src/network_service:consumer",
-        "//tests/benchmarks:echo_service",
+        "//src/rbc:car_lock_unlock_service",
+        "//tests/performance_benchmarks:echo_service",
         "@score_communication//score/mw/com",
     ],
 )

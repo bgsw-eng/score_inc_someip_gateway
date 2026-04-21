@@ -1,0 +1,7 @@
+{
+    "appId": "CWCT",
+    "appDesc": "car_window_controller",
+    "logLevel": "kVerbose",
+    "logLevelThresholdConsole": "kVerbose",
+    "logMode": "kConsole"
+}

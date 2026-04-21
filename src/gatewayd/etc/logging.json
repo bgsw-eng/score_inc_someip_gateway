@@ -1,0 +1,7 @@
+{
+    "appId": "GWAY",
+    "appDesc": "gatewayd",
+    "logLevel": "kVerbose",
+    "logLevelThresholdConsole": "kVerbose",
+    "logMode": "kConsole"
+}

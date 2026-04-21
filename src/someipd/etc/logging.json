@@ -1,0 +1,7 @@
+{
+    "appId": "SIPC",
+    "appDesc": "someipd",
+    "logLevel": "kVerbose",
+    "logLevelThresholdConsole": "kVerbose",
+    "logMode": "kConsole"
+}

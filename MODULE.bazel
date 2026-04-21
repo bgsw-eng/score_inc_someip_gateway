@@ -278,6 +278,13 @@ new_local_repository(
     path = "/workspaces/vsomeip",
 )
 
+# Use local gRPC copy for development
+new_local_repository(
+    name = "com_github_grpc_grpc",
+    build_file = "@//:third_party/system_grpc.BUILD",
+    path = "/workspaces/grpc",
+)
+
 # Original http_archive configuration (commented out - using local copy above)
 # http_archive(
 #     name = "vsomeip",
@@ -290,3 +297,15 @@ new_local_repository(
 #         "https://github.com/COVESA/vsomeip/archive/refs/tags/3.3.8.tar.gz",
 #     ],
 # )
+
+# ============================================================================
+# gRPC & Protocol Buffers for KUKSA Data Broker Communication
+# ============================================================================
+bazel_dep(name = "rules_proto", version = "7.1.0")
+
+# KUKSA Data Broker - uses local wrapper with pre-generated proto headers
+new_local_repository(
+    name = "com_kukavalhal_databroker",
+    build_file = "@//:third_party/com_kukavalhal_databroker/BUILD.bazel",
+    path = "/workspaces/Score_App/third_party/com_kukavalhal_databroker",
+)

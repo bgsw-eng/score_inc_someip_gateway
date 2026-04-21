@@ -60,8 +60,12 @@ cc_library(
     name = "remote_service_instance",
     srcs = ["remote_service_instance.cpp"],
     hdrs = ["remote_service_instance.h"],
+    defines = ["ENABLE_KUKSA_BROKER_FEEDER"],
     deps = [
         ":config_flatbuffers",
+        "//src/gatewayd/kuksa_broker_feeder:collector_client",
+        "//src/gatewayd/kuksa_broker_feeder:create_datapoint",
+        "//src/gatewayd/kuksa_broker_feeder:data_broker_feeder",
         "//src/network_service:consumer",
         "//src/rbc:car_lock_unlock_service",
         "//tests/performance_benchmarks:echo_service",

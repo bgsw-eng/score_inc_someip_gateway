@@ -1,0 +1,55 @@
+# *******************************************************************************
+# Copyright (c) 2025 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+# *******************************************************************************
+
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_library(
+    name = "collector_client",
+    srcs = ["collector_client.cc"],
+    hdrs = ["collector_client.h"],
+    visibility = ["//visibility:public"],
+    linkopts = ["-lgrpc++", "-lprotobuf"],
+    deps = [
+        "@com_github_grpc_grpc//:grpc++_public",
+        "@com_kukavalhal_databroker//:collector_cc_grpc",
+        "@com_kukavalhal_databroker//:collector_cc_proto",
+        "@com_kukavalhal_databroker//:types_cc_proto",
+        "@com_kukavalhal_databroker//:val_cc_grpc",
+        "@com_kukavalhal_databroker//:val_cc_proto",
+    ],
+)
+
+cc_library(
+    name = "create_datapoint",
+    hdrs = ["create_datapoint.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_kukavalhal_databroker//:types_cc_proto",
+    ],
+)
+
+cc_library(
+    name = "data_broker_feeder",
+    srcs = ["data_broker_feeder.cc"],
+    hdrs = ["data_broker_feeder.h"],
+    visibility = ["//visibility:public"],
+    linkopts = ["-lgrpc++", "-lprotobuf"],
+    deps = [
+        ":collector_client",
+        ":create_datapoint",
+        "@com_github_grpc_grpc//:grpc++_public",
+        "@com_kukavalhal_databroker//:collector_cc_grpc",
+        "@com_kukavalhal_databroker//:collector_cc_proto",
+        "@com_kukavalhal_databroker//:types_cc_proto",
+    ],
+)

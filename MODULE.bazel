@@ -278,13 +278,6 @@ new_local_repository(
     path = "/workspaces/vsomeip",
 )
 
-# Use local gRPC copy for development
-new_local_repository(
-    name = "com_github_grpc_grpc",
-    build_file = "@//:third_party/system_grpc.BUILD",
-    path = "/workspaces/grpc",
-)
-
 # Original http_archive configuration (commented out - using local copy above)
 # http_archive(
 #     name = "vsomeip",
@@ -303,9 +296,22 @@ new_local_repository(
 # ============================================================================
 bazel_dep(name = "rules_proto", version = "7.1.0")
 
+# rules_grpc for gRPC proto compilation support
+bazel_dep(name = "grpc", version = "1.70.1")
+
+# Use local gRPC repository for development - headers only for includes
+# Pre-generated .pb.cc files will link against gRPC libraries via rules_grpc
+new_local_repository(
+    name = "com_github_grpc_grpc",
+    build_file = "@//:third_party/system_grpc.BUILD",
+    path = "/workspaces/grpc",
+)
+
 # KUKSA Data Broker - uses local wrapper with pre-generated proto headers
 new_local_repository(
     name = "com_kukavalhal_databroker",
     build_file = "@//:third_party/com_kukavalhal_databroker/BUILD.bazel",
     path = "/workspaces/Score_App/third_party/com_kukavalhal_databroker",
 )
+
+bazel_dep(name = "protobuf", version = "34.1")

@@ -59,6 +59,7 @@ cmake(
         "Boost_NO_SYSTEM_PATHS": "ON",
         "Boost_USE_STATIC_LIBS": "ON",
         "ENABLE_SIGNAL_HANDLING": "ON",
+        "CMAKE_CXX_FLAGS": "-Wno-error=stringop-overflow -Wno-stringop-overflow",
     } | select({
         # Workaround for bazel-contrib/rules_foreign_cc#869
         "@platforms//os:qnx": {"CMAKE_SYSTEM_NAME": "QNX"},

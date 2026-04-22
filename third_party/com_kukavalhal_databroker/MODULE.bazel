@@ -1,0 +1,17 @@
+module(
+    name = "com_kukavalhal_databroker_wrapper",
+    version = "0.0.1",
+)
+
+bazel_dep(name = "rules_proto", version = "6.0.0-rc1")
+bazel_dep(name = "com_github_grpc_grpc", version = "1.66.0")
+
+# Import the databroker archive from parent
+http_archive(
+    name = "com_kukavalhal_databroker",
+    strip_prefix = "kuksa-databroker-27ab1e094b911ae63bab0fa9a04b7a93d34d866d",
+    urls = [
+        "https://github.com/eclipse-kuksa/kuksa-databroker/archive/27ab1e094b911ae63bab0fa9a04b7a93d34d866d.tar.gz",
+    ],
+)
+

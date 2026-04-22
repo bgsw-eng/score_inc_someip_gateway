@@ -16,9 +16,11 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
 cc_library(
     name = "collector_client",
     srcs = ["collector_client.cc"],
-    hdrs = ["collector_client.h"],
+    hdrs = [
+        "collector_client.h",
+        "simple_log.h",
+    ],
     visibility = ["//visibility:public"],
-    linkopts = ["-lgrpc++", "-lprotobuf"],
     deps = [
         "@com_github_grpc_grpc//:grpc++_public",
         "@com_kukavalhal_databroker//:collector_cc_grpc",
@@ -41,9 +43,11 @@ cc_library(
 cc_library(
     name = "data_broker_feeder",
     srcs = ["data_broker_feeder.cc"],
-    hdrs = ["data_broker_feeder.h"],
+    hdrs = [
+        "data_broker_feeder.h",
+        "simple_log.h",
+    ],
     visibility = ["//visibility:public"],
-    linkopts = ["-lgrpc++", "-lprotobuf"],
     deps = [
         ":collector_client",
         ":create_datapoint",
@@ -51,5 +55,6 @@ cc_library(
         "@com_kukavalhal_databroker//:collector_cc_grpc",
         "@com_kukavalhal_databroker//:collector_cc_proto",
         "@com_kukavalhal_databroker//:types_cc_proto",
+        "@protobuf",
     ],
 )

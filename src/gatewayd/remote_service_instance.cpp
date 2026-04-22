@@ -13,14 +13,21 @@
 
 #include "remote_service_instance.h"
 
+#include <atomic>
+#include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <iostream>
-#include <map>
 #include <mutex>
+#include <thread>
 #include <type_traits>
 
 #include "score/mw/com/types.h"
+
+#if defined(ENABLE_KUKSA_BROKER_FEEDER)
+#include "src/gatewayd/kuksa_broker_feeder/collector_client.h"
+#include "src/gatewayd/kuksa_broker_feeder/create_datapoint.h"
+#include "src/gatewayd/kuksa_broker_feeder/data_broker_feeder.h"
+#endif
 
 using score::mw::com::GenericProxy;
 using score::mw::com::SamplePtr;
@@ -32,48 +39,93 @@ using network_service::interfaces::message_transfer::SomeipMessageTransferProxy;
 static const std::size_t max_sample_count = 10;
 static const std::size_t SOMEIP_FULL_HEADER_SIZE = 16;
 
-// Shared state for RBC signals (thread-safe JSON file writing)
-static std::recursive_mutex rbc_signals_mutex;
-static std::map<std::string, uint32_t> rbc_signals_cache;
+// RBC signal mappings (received from SOME/IP, forwarded directly to KUKSA databroker)
+// LOCK STATUS   (0x3003/0x8002) → Vehicle.Powertrain.ElectricMotor.MU1_Reserved_01
+// HAZARD LAMP   (0x3003/0x8003) → Vehicle.Powertrain.ElectricMotor.MU1_Reserved_02
+// POSITION LAMP (0x3003/0x8004) → Vehicle.Powertrain.ElectricMotor.MU1_Reserved_03
+// APPROACH LAMP (0x3004/0x8009) → Vehicle.Powertrain.TractionBattery.DTE.MU2_Reserved01
 
-// RBC signal mappings (received from SOME/IP, forwarded to IPC skeletons)
-// scoreApp reads these from /tmp/rbc_signals.json and writes to external databroker via Velocitas
-// SDK LOCK STATUS   (0x3003/0x8002) → MU1_Reserved_01 HAZARD LAMP   (0x3003/0x8003) →
-// MU1_Reserved_02 POSITION LAMP (0x3003/0x8004) → MU1_Reserved_03 APPROACH LAMP (0x3004/0x8009) →
-// MU2_Reserved01
+#if defined(ENABLE_KUKSA_BROKER_FEEDER)
+static const char* kBrokerAddrEnv = "BROKER_ADDR";
+static const char* kBrokerTokenEnv = "BROKER_TOKEN";
+static const char* kDefaultBrokerAddr = "localhost:55555";
 
-// Helper function to write RBC signals to JSON file (read by scoreApp)
-static void writeRbcSignalsJson() {
-    // Write all cached RBC signals to JSON file atomically
-    std::lock_guard<std::recursive_mutex> lock(rbc_signals_mutex);
+static std::mutex broker_feeder_mutex;
+static std::shared_ptr<sdv::broker_feeder::CollectorClient> collector_client;
+static std::shared_ptr<sdv::broker_feeder::DataBrokerFeeder> broker_feeder;
+static std::shared_ptr<std::thread> broker_feeder_thread;
+static std::atomic<bool> broker_feeder_active{false};
 
-    // Build JSON string manually (avoids external dependencies)
-    std::string json = "{\n  \"rbc_signals\": {\n";
-    bool first = true;
-    for (const auto& [key, value] : rbc_signals_cache) {
-        if (!first) json += ",\n";
-        json += "    \"" + key + "\": " + std::to_string(value);
-        first = false;
+static std::string getEnvOrDefault(const char* name, const std::string& fallback) {
+    auto value = std::getenv(name);
+    return value ? std::string(value) : fallback;
+}
+
+static void initBrokerFeeder() {
+    if (broker_feeder_active) {
+        return;  // Already initialized, fast path without lock
     }
-    json += "\n  }\n}\n";
+    std::lock_guard<std::mutex> lock(broker_feeder_mutex);
+    if (broker_feeder_active) {
+        return;  // Double-checked after acquiring lock
+    }
+    const std::string broker_addr = getEnvOrDefault(kBrokerAddrEnv, kDefaultBrokerAddr);
+    const std::string broker_token = getEnvOrDefault(kBrokerTokenEnv, std::string{});
+    std::cout << "[gatewayd] Attempting to initialize Kuksa broker feeder at " << broker_addr
+              << std::endl;
 
-    // Write to temporary file, then atomic rename
-    const char* json_file = "/tmp/rbc_signals.json";
-    const char* tmp_file = "/tmp/rbc_signals.json.tmp";
+    sdv::broker_feeder::DatapointConfiguration metadata = {
+        {"Vehicle.Powertrain.ElectricMotor.MU1_Reserved_01", sdv::databroker::v1::DataType::UINT32,
+         sdv::databroker::v1::ChangeType::ON_CHANGE, sdv::broker_feeder::createNotAvailableValue(),
+         "RBC lock status from SOME/IP 0x3003/0x8002"},
+        {"Vehicle.Powertrain.ElectricMotor.MU1_Reserved_02", sdv::databroker::v1::DataType::UINT32,
+         sdv::databroker::v1::ChangeType::ON_CHANGE, sdv::broker_feeder::createNotAvailableValue(),
+         "RBC hazard lamp from SOME/IP 0x3003/0x8003"},
+        {"Vehicle.Powertrain.ElectricMotor.MU1_Reserved_03", sdv::databroker::v1::DataType::UINT32,
+         sdv::databroker::v1::ChangeType::ON_CHANGE, sdv::broker_feeder::createNotAvailableValue(),
+         "RBC position lamp from SOME/IP 0x3003/0x8004"},
+        {"Vehicle.Powertrain.TractionBattery.DTE.MU2_Reserved01",
+         sdv::databroker::v1::DataType::UINT32, sdv::databroker::v1::ChangeType::ON_CHANGE,
+         sdv::broker_feeder::createNotAvailableValue(),
+         "RBC approach lamp from SOME/IP 0x3004/0x8009"},
+    };
 
-    std::ofstream out(tmp_file);
-    if (out.is_open()) {
-        out << json;
-        out.close();
-        // Atomic rename (mv on Linux is atomic)
-        rename(tmp_file, json_file);
+    collector_client =
+        sdv::broker_feeder::CollectorClient::createInstance(broker_addr, broker_token);
+    broker_feeder =
+        sdv::broker_feeder::DataBrokerFeeder::createInstance(collector_client, std::move(metadata));
 
-        std::cout << "[gatewayd-json] Updated " << json_file << " with " << rbc_signals_cache.size()
-                  << " signals" << std::endl;
-    } else {
-        std::cerr << "[gatewayd-json] Failed to write " << tmp_file << std::endl;
+    if (!broker_feeder) {
+        std::cerr << "[gatewayd] DataBrokerFeeder::createInstance returned null, will retry."
+                  << std::endl;
+        collector_client.reset();
+        return;
+    }
+    std::cout << "[gatewayd] DataBrokerFeeder instance created, starting feeder thread..."
+              << std::endl;
+
+    broker_feeder_thread =
+        std::make_shared<std::thread>(&sdv::broker_feeder::DataBrokerFeeder::Run, broker_feeder);
+    broker_feeder_active = true;
+    std::cout << "[gatewayd] Kuksa broker feeder initialized for " << broker_addr << std::endl;
+}
+
+static void shutdownBrokerFeeder() {
+    if (broker_feeder_active && broker_feeder) {
+        broker_feeder->Shutdown();
+        broker_feeder_active = false;
+    }
+    if (broker_feeder_thread && broker_feeder_thread->joinable()) {
+        broker_feeder_thread->join();
     }
 }
+
+struct BrokerFeederShutdownGuard {
+    ~BrokerFeederShutdownGuard() { shutdownBrokerFeeder(); }
+};
+
+static BrokerFeederShutdownGuard broker_feeder_shutdown_guard;
+#endif
 
 static void writeRbcToDatabroker(uint16_t svc_id, uint16_t evt_id,
                                  const score::cpp::span<const std::byte>& payload,
@@ -103,17 +155,18 @@ static void writeRbcToDatabroker(uint16_t svc_id, uint16_t evt_id,
         return;  // Not an RBC signal
     }
 
-    // Update cache and write to JSON file
-    {
-        std::lock_guard<std::recursive_mutex> lock(rbc_signals_mutex);
-        bool changed = (rbc_signals_cache[signal_key] != value);
-        rbc_signals_cache[signal_key] = value;
-
+#if defined(ENABLE_KUKSA_BROKER_FEEDER)
+    initBrokerFeeder();
+    if (broker_feeder_active && broker_feeder) {
         std::cout << "[gatewayd] " << signal_name << " (" << vss_path << ") = " << value
-                  << std::endl;
-        // Always write full JSON to ensure scoreApp has all signals
-        writeRbcSignalsJson();
+                  << " → KUKSA Databroker" << std::endl;
+        broker_feeder->FeedValue(vss_path, sdv::broker_feeder::createDatapoint(value));
+        return;
     }
+#endif
+    // Feeder not available
+    std::cerr << "[gatewayd] ERROR: " << signal_name << " (" << vss_path
+              << ") received but feeder not initialized" << std::endl;
 }
 
 RemoteServiceInstance::RemoteServiceInstance(
@@ -122,6 +175,11 @@ RemoteServiceInstance::RemoteServiceInstance(
     : service_instance_config_(std::move(service_instance_config)),
       ipc_skeleton_(std::move(ipc_skeleton)),
       someip_message_proxy_(std::move(someip_message_proxy)) {
+#if defined(ENABLE_KUKSA_BROKER_FEEDER)
+    std::cout << "[gatewayd] KUKSA broker feeder support: ENABLED" << std::endl;
+#else
+    std::cout << "[gatewayd] KUKSA broker feeder support: DISABLED (not compiled in)" << std::endl;
+#endif
     // TODO: Error handling
     std::visit([](auto& skel) { (void)skel.OfferService(); }, ipc_skeleton_);
 

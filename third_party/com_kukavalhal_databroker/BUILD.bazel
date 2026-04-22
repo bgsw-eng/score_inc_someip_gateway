@@ -1,0 +1,75 @@
+# *******************************************************************************
+# Copyright (c) 2025 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+# *******************************************************************************
+
+# Build file for KUKSA Data Broker - compiles pre-generated proto files for aarch64
+
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+# Headers + compiled proto sources - required for feeder at runtime
+cc_library(
+    name = "databroker_v1_cc",
+    srcs = glob([
+        "generated/**/*.pb.cc",
+        "generated/**/*.grpc.pb.cc",
+    ]),
+    hdrs = glob([
+        "generated/**/*.pb.h",
+        "generated/**/*.grpc.pb.h",
+    ]),
+    includes = ["generated"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_grpc_grpc//:grpc++_public",
+        "@com_github_grpc_grpc//:protobuf",
+    ],
+)
+
+# Aliases for backward compatibility with feeder BUILD targets
+cc_library(
+    name = "types_cc_proto",
+    visibility = ["//visibility:public"],
+    deps = [":databroker_v1_cc"],
+)
+
+cc_library(
+    name = "collector_cc_proto",
+    visibility = ["//visibility:public"],
+    deps = [":databroker_v1_cc"],
+)
+
+cc_library(
+    name = "collector_cc_grpc",
+    visibility = ["//visibility:public"],
+    deps = [":databroker_v1_cc"],
+)
+
+cc_library(
+    name = "val_types_cc_proto",
+    visibility = ["//visibility:public"],
+    deps = [":databroker_v1_cc"],
+)
+
+cc_library(
+    name = "val_cc_proto",
+    visibility = ["//visibility:public"],
+    deps = [":databroker_v1_cc"],
+)
+
+cc_library(
+    name = "val_cc_grpc",
+    visibility = ["//visibility:public"],
+    deps = [":databroker_v1_cc"],
+)
+
+# Aggregate databroker target

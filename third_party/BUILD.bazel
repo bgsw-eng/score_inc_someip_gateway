@@ -1,0 +1,20 @@
+# BUILD file for third_party directory
+# Exports build files for external dependencies
+
+filegroup(
+    name = "system_grpc.BUILD",
+    srcs = ["system_grpc.BUILD"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "databroker.BUILD",
+    srcs = ["databroker.BUILD"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "vsomeip.BUILD.bazel",
+    srcs = ["vsomeip.BUILD.bazel"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,20 @@
+"""
+Local wrapper module for gRPC 1.66.0.
+Provides the com_github_grpc_grpc@1.66.0 module with http_archive fetching.
+"""
+
+module(
+    name = "com_github_grpc_grpc",
+    version = "1.66.0",
+)
+
+bazel_dep(name = "protobuf", version = "29.0")
+bazel_dep(name = "rules_proto", version = "6.0.0-rc1")
+
+local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
+
+# Use mounted local gRPC source tree from devcontainer.
+local_repository(
+    name = "grpc_repo",
+    path = "/workspaces/grpc",
+)

@@ -1,0 +1,26 @@
+# Wrapper BUILD file for gRPC module.
+# Re-exports gRPC targets from the http_archive to match expected target names.
+
+filegroup(
+    name = "all_srcs",
+    srcs = ["@grpc_repo//:all"],
+)
+
+# Export key gRPC targets used by the project
+alias(
+    name = "grpc++_public",
+    actual = "@grpc_repo//:grpc++_public",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "grpc_public",
+    actual = "@grpc_repo//:grpc_public",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "grpcpp_reflection",
+    actual = "@grpc_repo//:grpcpp_reflection",
+    visibility = ["//visibility:public"],
+)

@@ -24,9 +24,9 @@
 #include "score/mw/com/types.h"
 
 #if defined(ENABLE_KUKSA_BROKER_FEEDER)
-#include "src/gatewayd/kuksa_broker_feeder/collector_client.h"
-#include "src/gatewayd/kuksa_broker_feeder/create_datapoint.h"
-#include "src/gatewayd/kuksa_broker_feeder/data_broker_feeder.h"
+#include "collector_client.h"
+#include "create_datapoint.h"
+#include "data_broker_feeder.h"
 #endif
 
 using score::mw::com::GenericProxy;

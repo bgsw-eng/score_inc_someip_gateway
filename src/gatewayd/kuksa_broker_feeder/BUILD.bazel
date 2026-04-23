@@ -13,6 +13,9 @@
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
+# Target-specific visibility: only expose feeder components for x86_64 native builds
+# Cross-compilation to aarch64 does not have gRPC/protobuf libraries available in sysroot
+
 cc_library(
     name = "collector_client",
     srcs = ["collector_client.cc"],
@@ -20,6 +23,8 @@ cc_library(
         "collector_client.h",
         "simple_log.h",
     ],
+    includes = ["."],
+    strip_include_prefix = ".",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_grpc_grpc//:grpc++_public",
@@ -28,12 +33,15 @@ cc_library(
         "@com_kukavalhal_databroker//:types_cc_proto",
         "@com_kukavalhal_databroker//:val_cc_grpc",
         "@com_kukavalhal_databroker//:val_cc_proto",
+        "@protobuf",
     ],
 )
 
 cc_library(
     name = "create_datapoint",
     hdrs = ["create_datapoint.h"],
+    includes = ["."],
+    strip_include_prefix = ".",
     visibility = ["//visibility:public"],
     deps = [
         "@com_kukavalhal_databroker//:types_cc_proto",
@@ -47,6 +55,8 @@ cc_library(
         "data_broker_feeder.h",
         "simple_log.h",
     ],
+    includes = ["."],
+    strip_include_prefix = ".",
     visibility = ["//visibility:public"],
     deps = [
         ":collector_client",
@@ -55,6 +65,8 @@ cc_library(
         "@com_kukavalhal_databroker//:collector_cc_grpc",
         "@com_kukavalhal_databroker//:collector_cc_proto",
         "@com_kukavalhal_databroker//:types_cc_proto",
+        "@com_kukavalhal_databroker//:val_cc_grpc",
+        "@com_kukavalhal_databroker//:val_cc_proto",
         "@protobuf",
     ],
 )

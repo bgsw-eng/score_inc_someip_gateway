@@ -33,7 +33,6 @@ cc_library(
         "@com_kukavalhal_databroker//:types_cc_proto",
         "@com_kukavalhal_databroker//:val_cc_grpc",
         "@com_kukavalhal_databroker//:val_cc_proto",
-        "@protobuf",
     ],
 )
 
@@ -67,6 +66,5 @@ cc_library(
         "@com_kukavalhal_databroker//:types_cc_proto",
         "@com_kukavalhal_databroker//:val_cc_grpc",
         "@com_kukavalhal_databroker//:val_cc_proto",
-        "@protobuf",
     ],
 )

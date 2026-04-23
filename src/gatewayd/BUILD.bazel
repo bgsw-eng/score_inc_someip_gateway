@@ -32,10 +32,17 @@ exports_files(
     ],
 )
 
+config_setting(
+    name = "aarch64_linux",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+)
+
 cc_binary(
     name = "gatewayd",
     srcs = ["main.cpp"],
-    defines = ["ENABLE_KUKSA_BROKER_FEEDER"],
     visibility = ["//visibility:public"],
     deps = [
         ":config_flatbuffers",
@@ -43,7 +50,15 @@ cc_binary(
         ":remote_service_instance",
         "//src/network_service:consumer",
         "@score_communication//score/mw/com",
-    ],
+        "@score_baselibs//score/mw/log:console_only_backend",
+    ] + select({
+        ":aarch64_linux": [],
+        "//conditions:default": [
+            "//src/gatewayd/kuksa_broker_feeder:collector_client",
+            "//src/gatewayd/kuksa_broker_feeder:create_datapoint",
+            "//src/gatewayd/kuksa_broker_feeder:data_broker_feeder",
+        ],
+    }),
 )
 
 cc_library(
@@ -58,36 +73,40 @@ cc_library(
 )
 
 cc_library(
-    name = "remote_service_instance_impl",
+    name = "remote_service_instance",
     srcs = ["remote_service_instance.cpp"],
     hdrs = ["remote_service_instance.h"],
+    defines = select({
+        ":aarch64_linux": [],
+        "//conditions:default": ["ENABLE_KUKSA_BROKER_FEEDER"],
+    }),
     deps = [
         ":config_flatbuffers",
         "//src/network_service:consumer",
         "//src/rbc:car_lock_unlock_service",
         "//tests/performance_benchmarks:echo_service",
         "@score_communication//score/mw/com",
-    ],
+    ] + select({
+        ":aarch64_linux": [],
+        "//conditions:default": [
+            "//src/gatewayd/kuksa_broker_feeder:collector_client",
+            "//src/gatewayd/kuksa_broker_feeder:create_datapoint",
+            "//src/gatewayd/kuksa_broker_feeder:data_broker_feeder",
+        ],
+    }),
 )
 
-# Alias for backward compatibility
-alias(
-    name = "remote_service_instance",
-    actual = ":remote_service_instance_impl",
-)
-
-# Shared library version
-cc_library(
+cc_shared_library(
     name = "libremote_service_instance",
-    linkstatic = False,
+    shared_lib_name = "libremote_service_instance.so",
     visibility = ["//visibility:public"],
-    deps = [":remote_service_instance_impl"],
+    deps = [":remote_service_instance"],
 )
 
 cc_static_library(
     name = "libremote_service_instance_static",
     visibility = ["//visibility:public"],
-    deps = [":remote_service_instance_impl"],
+    deps = [":remote_service_instance"],
 )
 
 flatbuffer_cc_library(

@@ -24,11 +24,11 @@ cmake(
         "libgrpc.so",
         "libgrpc.so.29",
         "libgrpc++.so",
-        "libgrpc++.so.1",
+        "libgrpc++.so.1.51",
         "libgrpc_unsecure.so",
         "libgrpc_unsecure.so.29",
         "libgrpc++_unsecure.so",
-        "libgrpc++_unsecure.so.1",
+        "libgrpc++_unsecure.so.1.51",
         "libprotobuf.so",
         "libprotobuf.so.32",
         "libabsl_base.so",
@@ -36,21 +36,6 @@ cmake(
         "libabsl_hash.so",
         "libabsl_log_internal_message.so",
         "libabsl_strings.so",
-    ],
-    visibility = ["//visibility:public"],
-)
-
-cc_library(
-    name = "grpc_shared_public",
-    hdrs = glob([
-        "include/grpcpp/**/*.h",
-        "include/grpc/**/*.h",
-        "include/google/protobuf/**/*.h",
-        "include/absl/**/*.h",
-    ]),
-    includes = ["include"],
-    shared_libs = [
-        ":grpc_shared",
     ],
     visibility = ["//visibility:public"],
 )

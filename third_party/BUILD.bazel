@@ -8,6 +8,12 @@ filegroup(
 )
 
 filegroup(
+    name = "grpc_shared.BUILD",
+    srcs = ["grpc_shared.BUILD"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
     name = "databroker.BUILD",
     srcs = ["databroker.BUILD"],
     visibility = ["//visibility:public"],

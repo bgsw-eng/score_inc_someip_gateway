@@ -1,47 +1,87 @@
-"""
-BUILD file for gRPC - Headers only
-For headers and type definitions. 
-Note: gRPC cmake build disabled due to complexity of test proto file handling.
-When feeder source is ready, can enable cmake rule for .so generation.
-"""
+# BUILD file for local gRPC source tree
+# Uses headers from cloned gRPC v1.70.1 source
+
+filegroup(
+    name = "all",
+    srcs = glob(["**"]),
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "absl_headers",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_absl//absl/algorithm:algorithm",
+        "@com_github_absl//absl/algorithm:container",
+        "@com_github_absl//absl/base:base",
+        "@com_github_absl//absl/base:core_headers",
+        "@com_github_absl//absl/cleanup:cleanup",
+        "@com_github_absl//absl/container:flat_hash_map",
+        "@com_github_absl//absl/container:flat_hash_set",
+        "@com_github_absl//absl/functional:any_invocable",
+        "@com_github_absl//absl/memory:memory",
+        "@com_github_absl//absl/meta:type_traits",
+        "@com_github_absl//absl/status:status",
+        "@com_github_absl//absl/status:statusor",
+        "@com_github_absl//absl/strings:strings",
+        "@com_github_absl//absl/synchronization:synchronization",
+        "@com_github_absl//absl/time:time",
+        "@com_github_absl//absl/types:optional",
+        "@com_github_absl//absl/types:span",
+        "@com_github_absl//absl/utility:utility",
+    ],
+)
+
+cc_library(
+    name = "protobuf_headers",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_protobuf//:protobuf_headers"],
+)
 
 cc_library(
     name = "grpc++_public",
     hdrs = glob([
-        "include/grpcpp/**/*.h",
         "include/grpc/**/*.h",
-        "include/absl/**/*.h",
+        "include/grpc++/**/*.h",
+        "include/grpcpp/**/*.h",
     ]),
     includes = ["include"],
     visibility = ["//visibility:public"],
+    deps = [
+        ":grpc_public",
+        ":absl_headers",
+        ":protobuf_headers",
+    ],
 )
 
 cc_library(
-    name = "protobuf",
+    name = "grpc_public",
     hdrs = glob([
-        "include/google/protobuf/**/*.h",
-        "include/google/protobuf/**/*.inc",
+        "include/grpc/**/*.h",
     ]),
     includes = ["include"],
     visibility = ["//visibility:public"],
+    deps = [
+        ":absl_headers",
+        ":protobuf_headers",
+    ],
 )
 
 cc_library(
-    name = "grpc++",
-    hdrs = glob(["include/grpcpp/**/*.h"]),
+    name = "grpcpp_reflection",
+    hdrs = glob([
+        "include/grpcpp/ext/*.h",
+    ]),
     includes = ["include"],
-    visibility = ["//visibility:public"],
-)
-
-cc_library(
-    name = "grpc_base",
-    hdrs = glob(["include/grpc/**/*.h"]),
-    includes = ["include"],
-    visibility = ["//visibility:public"],
-)
-
-cc_library(
-    name = "grpc_cc_proto",
     visibility = ["//visibility:public"],
     deps = [":grpc++_public"],
+)
+
+# protobuf runtime and headers vendored under the local gRPC checkout.
+cc_library(
+    name = "protobuf",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_protobuf//:protobuf",
+    ],
 )

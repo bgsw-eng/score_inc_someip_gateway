@@ -52,7 +52,11 @@ cc_binary(
         "@score_communication//score/mw/com",
         "@score_baselibs//score/mw/log:console_only_backend",
     ] + select({
-        ":aarch64_linux": [],
+        ":aarch64_linux": [
+            "//src/gatewayd/kuksa_broker_feeder:collector_client",
+            "//src/gatewayd/kuksa_broker_feeder:create_datapoint",
+            "//src/gatewayd/kuksa_broker_feeder:data_broker_feeder",
+        ],
         "//conditions:default": [
             "//src/gatewayd/kuksa_broker_feeder:collector_client",
             "//src/gatewayd/kuksa_broker_feeder:create_datapoint",
@@ -77,7 +81,7 @@ cc_library(
     srcs = ["remote_service_instance.cpp"],
     hdrs = ["remote_service_instance.h"],
     defines = select({
-        ":aarch64_linux": [],
+        ":aarch64_linux": ["ENABLE_KUKSA_BROKER_FEEDER"],
         "//conditions:default": ["ENABLE_KUKSA_BROKER_FEEDER"],
     }),
     deps = [
@@ -87,7 +91,11 @@ cc_library(
         "//tests/performance_benchmarks:echo_service",
         "@score_communication//score/mw/com",
     ] + select({
-        ":aarch64_linux": [],
+        ":aarch64_linux": [
+            "//src/gatewayd/kuksa_broker_feeder:collector_client",
+            "//src/gatewayd/kuksa_broker_feeder:create_datapoint",
+            "//src/gatewayd/kuksa_broker_feeder:data_broker_feeder",
+        ],
         "//conditions:default": [
             "//src/gatewayd/kuksa_broker_feeder:collector_client",
             "//src/gatewayd/kuksa_broker_feeder:create_datapoint",

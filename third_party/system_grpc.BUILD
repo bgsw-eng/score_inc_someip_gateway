@@ -51,7 +51,9 @@ cc_library(
         ":grpc_public",
         ":absl_headers",
         ":protobuf_headers",
+        "@//third_party:grpc_prebuilt_runtime",
     ],
+    linkopts = ["-Wl,--allow-shlib-undefined"],
 )
 
 cc_library(

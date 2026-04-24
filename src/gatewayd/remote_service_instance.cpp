@@ -39,6 +39,10 @@ using network_service::interfaces::message_transfer::SomeipMessageTransferProxy;
 static const std::size_t max_sample_count = 10;
 static const std::size_t SOMEIP_FULL_HEADER_SIZE = 16;
 
+static const char* kSomeipLastServiceIdPath = "Vehicle.Private.Gatewayd.Someip.LastServiceId";
+static const char* kSomeipLastEventIdPath = "Vehicle.Private.Gatewayd.Someip.LastEventId";
+static const char* kSomeipLastPayloadBytePath = "Vehicle.Private.Gatewayd.Someip.LastPayloadByte";
+
 // RBC signal mappings (received from SOME/IP, forwarded directly to KUKSA databroker)
 // LOCK STATUS   (0x3003/0x8002) → Vehicle.Powertrain.ElectricMotor.MU1_Reserved_01
 // HAZARD LAMP   (0x3003/0x8003) → Vehicle.Powertrain.ElectricMotor.MU1_Reserved_02
@@ -88,6 +92,15 @@ static void initBrokerFeeder() {
          sdv::databroker::v1::DataType::UINT32, sdv::databroker::v1::ChangeType::ON_CHANGE,
          sdv::broker_feeder::createNotAvailableValue(),
          "RBC approach lamp from SOME/IP 0x3004/0x8009"},
+        {kSomeipLastServiceIdPath, sdv::databroker::v1::DataType::UINT32,
+         sdv::databroker::v1::ChangeType::ON_CHANGE, sdv::broker_feeder::createNotAvailableValue(),
+         "Last SOME/IP service id received by gatewayd"},
+        {kSomeipLastEventIdPath, sdv::databroker::v1::DataType::UINT32,
+         sdv::databroker::v1::ChangeType::ON_CHANGE, sdv::broker_feeder::createNotAvailableValue(),
+         "Last SOME/IP event id received by gatewayd"},
+        {kSomeipLastPayloadBytePath, sdv::databroker::v1::DataType::UINT32,
+         sdv::databroker::v1::ChangeType::ON_CHANGE, sdv::broker_feeder::createNotAvailableValue(),
+         "Last SOME/IP payload first byte received by gatewayd"},
     };
 
     collector_client =
@@ -127,45 +140,48 @@ struct BrokerFeederShutdownGuard {
 static BrokerFeederShutdownGuard broker_feeder_shutdown_guard;
 #endif
 
-static void writeRbcToDatabroker(uint16_t svc_id, uint16_t evt_id,
-                                 const score::cpp::span<const std::byte>& payload,
-                                 const char* signal_name) {
+static void writeSomeipToDatabroker(uint16_t svc_id, uint16_t evt_id,
+                                    const score::cpp::span<const std::byte>& payload,
+                                    const char* signal_name) {
     // Extract value from SOME/IP payload (typically 1 byte)
     if (payload.empty()) {
         return;
     }
     uint32_t value = static_cast<uint32_t>(static_cast<uint8_t>(payload.data()[0]));
-    std::string vss_path;
-    std::string signal_key;
+    std::string rbc_vss_path;
 
     // Map SOME/IP service:event to signal key and VSS path
     if (svc_id == 0x3003 && evt_id == 0x8002) {
-        signal_key = "LOCK_STATUS";
-        vss_path = "Vehicle.Powertrain.ElectricMotor.MU1_Reserved_01";
+        rbc_vss_path = "Vehicle.Powertrain.ElectricMotor.MU1_Reserved_01";
     } else if (svc_id == 0x3003 && evt_id == 0x8003) {
-        signal_key = "HAZARD_LAMP";
-        vss_path = "Vehicle.Powertrain.ElectricMotor.MU1_Reserved_02";
+        rbc_vss_path = "Vehicle.Powertrain.ElectricMotor.MU1_Reserved_02";
     } else if (svc_id == 0x3003 && evt_id == 0x8004) {
-        signal_key = "POSITION_LAMP";
-        vss_path = "Vehicle.Powertrain.ElectricMotor.MU1_Reserved_03";
+        rbc_vss_path = "Vehicle.Powertrain.ElectricMotor.MU1_Reserved_03";
     } else if (svc_id == 0x3004 && evt_id == 0x8009) {
-        signal_key = "APPROACH_LAMP";
-        vss_path = "Vehicle.Powertrain.TractionBattery.DTE.MU2_Reserved01";
-    } else {
-        return;  // Not an RBC signal
+        rbc_vss_path = "Vehicle.Powertrain.TractionBattery.DTE.MU2_Reserved01";
     }
 
 #if defined(ENABLE_KUKSA_BROKER_FEEDER)
     initBrokerFeeder();
     if (broker_feeder_active && broker_feeder) {
-        std::cout << "[gatewayd] " << signal_name << " (" << vss_path << ") = " << value
-                  << " → KUKSA Databroker" << std::endl;
-        broker_feeder->FeedValue(vss_path, sdv::broker_feeder::createDatapoint(value));
+        broker_feeder->FeedValue(kSomeipLastServiceIdPath,
+                                 sdv::broker_feeder::createDatapoint(static_cast<uint32_t>(svc_id)));
+        broker_feeder->FeedValue(kSomeipLastEventIdPath,
+                                 sdv::broker_feeder::createDatapoint(static_cast<uint32_t>(evt_id)));
+        broker_feeder->FeedValue(kSomeipLastPayloadBytePath,
+                                 sdv::broker_feeder::createDatapoint(value));
+
+        if (!rbc_vss_path.empty()) {
+            std::cout << "[gatewayd] " << signal_name << " (" << rbc_vss_path << ") = " << value
+                      << " → KUKSA Databroker" << std::endl;
+            broker_feeder->FeedValue(rbc_vss_path, sdv::broker_feeder::createDatapoint(value));
+        }
         return;
     }
 #endif
     // Feeder not available
-    std::cerr << "[gatewayd] ERROR: " << signal_name << " (" << vss_path
+    std::cerr << "[gatewayd] ERROR: " << signal_name << " (svc=0x" << std::hex << svc_id
+              << ", evt=0x" << evt_id << std::dec
               << ") received but feeder not initialized" << std::endl;
 }
 
@@ -200,14 +216,6 @@ RemoteServiceInstance::RemoteServiceInstance(
                     (static_cast<uint16_t>(message[0]) << 8) | static_cast<uint16_t>(message[1]);
                 uint16_t evt_id =
                     (static_cast<uint16_t>(message[2]) << 8) | static_cast<uint16_t>(message[3]);
-
-                // Filter: only process messages for RBC services (0x3003, 0x3004)
-                if (!((svc_id == 0x3003 &&
-                       (evt_id == 0x8002 || evt_id == 0x8003 || evt_id == 0x8004)) ||
-                      (svc_id == 0x3004 && evt_id == 0x8009))) {
-                    // Not an RBC message, skip processing
-                    return;
-                }
 
                 // TODO: Check service id, method id, etc. Maybe do that in the dispatcher already?
                 auto payload = message.subspan(SOMEIP_FULL_HEADER_SIZE);
@@ -263,11 +271,12 @@ RemoteServiceInstance::RemoteServiceInstance(
                                 << std::endl;
                             skel.event_.Send(std::move(sample));
 
-                            // Also write RBC signals directly to databroker for scoreApp
-                            writeRbcToDatabroker(svc_id, evt_id, payload, signal_name);
                         }
                     },
                     ipc_skeleton_);
+
+                // Also write incoming SOME/IP signals directly to databroker.
+                writeSomeipToDatabroker(svc_id, evt_id, payload, signal_name);
             },
             max_sample_count);
     });

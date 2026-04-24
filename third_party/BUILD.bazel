@@ -1,6 +1,9 @@
 # BUILD file for third_party directory
 # Exports build files for external dependencies
 
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
 filegroup(
     name = "system_grpc.BUILD",
     srcs = ["system_grpc.BUILD"],
@@ -23,4 +26,67 @@ filegroup(
     name = "vsomeip.BUILD.bazel",
     srcs = ["vsomeip.BUILD.bazel"],
     visibility = ["//visibility:public"],
+)
+
+cc_import(
+    name = "grpcpp_so",
+    shared_library = "//artifacts/grpc-shared:libgrpc++.so.1.51.3",
+    visibility = ["//visibility:public"],
+)
+
+cc_import(
+    name = "grpc_so",
+    shared_library = "//artifacts/grpc-shared:libgrpc.so.29.0.0",
+    visibility = ["//visibility:public"],
+)
+
+cc_import(
+    name = "gpr_so",
+    shared_library = "//artifacts/grpc-shared:libgpr.so.29.0.0",
+    visibility = ["//visibility:public"],
+)
+
+cc_import(
+    name = "upb_so",
+    shared_library = "//artifacts/grpc-shared:libupb.so.29.0.0",
+    visibility = ["//visibility:public"],
+)
+
+cc_import(
+    name = "address_sorting_so",
+    shared_library = "//artifacts/grpc-shared:libaddress_sorting.so.29.0.0",
+    visibility = ["//visibility:public"],
+)
+
+cc_import(
+    name = "ssl_so",
+    shared_library = "//artifacts/grpc-shared:third_party/boringssl-with-bazel/libssl.so",
+    visibility = ["//visibility:public"],
+)
+
+cc_import(
+    name = "crypto_so",
+    shared_library = "//artifacts/grpc-shared:third_party/boringssl-with-bazel/libcrypto.so",
+    visibility = ["//visibility:public"],
+)
+
+cc_import(
+    name = "re2_so",
+    shared_library = "//artifacts/grpc-shared:third_party/re2/libre2.so.9.0.0",
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "grpc_prebuilt_runtime",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":grpcpp_so",
+        ":grpc_so",
+        ":gpr_so",
+        ":upb_so",
+        ":address_sorting_so",
+        ":ssl_so",
+        ":crypto_so",
+        ":re2_so",
+    ],
 )

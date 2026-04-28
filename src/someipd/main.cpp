@@ -192,11 +192,22 @@ int main(int argc, const char* argv[]) {
         rbc_last_value.fill(-1);
 
         // Create mw::com skeleton — publishes received RBC events to SHM for gatewayd
-        auto skeleton_result = SomeipMessageTransferSkeleton::Create(
+        // Use static so skeleton persists for entire application lifetime
+        static auto skeleton_result = SomeipMessageTransferSkeleton::Create(
             score::mw::com::InstanceSpecifier::Create(std::string("someipd/someipd_messages"))
                 .value());
-        auto skeleton = std::move(skeleton_result).value();
-        (void)skeleton.OfferService();
+        static auto skeleton = std::move(skeleton_result).value();
+        static bool skeleton_offered = false;
+        if (!skeleton_offered) {
+            auto offer_result = skeleton.OfferService();
+            if (offer_result.has_value()) {
+                std::cout << ">>> Skeleton OfferService() SUCCEEDED" << std::endl;
+            } else {
+                std::cerr << ">>> Skeleton OfferService() FAILED: "
+                          << offer_result.error().Message() << std::endl;
+            }
+            skeleton_offered = true;
+        }
 
         // -------------------------------
         // Step 1 — Register ALL message handlers BEFORE availability handlers.

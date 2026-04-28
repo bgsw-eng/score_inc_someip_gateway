@@ -216,7 +216,7 @@
       ]
     },
     {
-      "instanceSpecifier": "gatewayd/someipd_messages",
+      "instanceSpecifier": "someipd/someipd_messages",
       "serviceTypeName": "/gatewayd/SomeipMessageService",
       "version": {
         "major": 1,

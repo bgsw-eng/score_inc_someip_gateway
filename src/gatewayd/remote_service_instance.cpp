@@ -24,9 +24,9 @@
 #include "score/mw/com/types.h"
 
 #if defined(ENABLE_KUKSA_BROKER_FEEDER)
-#include "collector_client.h"
-#include "create_datapoint.h"
-#include "data_broker_feeder.h"
+#include "src/gatewayd/kuksa_broker_feeder/collector_client.h"
+#include "src/gatewayd/kuksa_broker_feeder/create_datapoint.h"
+#include "src/gatewayd/kuksa_broker_feeder/data_broker_feeder.h"
 #endif
 
 using score::mw::com::GenericProxy;
@@ -164,10 +164,10 @@ static void writeSomeipToDatabroker(uint16_t svc_id, uint16_t evt_id,
 #if defined(ENABLE_KUKSA_BROKER_FEEDER)
     initBrokerFeeder();
     if (broker_feeder_active && broker_feeder) {
-        broker_feeder->FeedValue(kSomeipLastServiceIdPath,
-                                 sdv::broker_feeder::createDatapoint(static_cast<uint32_t>(svc_id)));
-        broker_feeder->FeedValue(kSomeipLastEventIdPath,
-                                 sdv::broker_feeder::createDatapoint(static_cast<uint32_t>(evt_id)));
+        broker_feeder->FeedValue(kSomeipLastServiceIdPath, sdv::broker_feeder::createDatapoint(
+                                                               static_cast<uint32_t>(svc_id)));
+        broker_feeder->FeedValue(kSomeipLastEventIdPath, sdv::broker_feeder::createDatapoint(
+                                                             static_cast<uint32_t>(evt_id)));
         broker_feeder->FeedValue(kSomeipLastPayloadBytePath,
                                  sdv::broker_feeder::createDatapoint(value));
 
@@ -181,8 +181,8 @@ static void writeSomeipToDatabroker(uint16_t svc_id, uint16_t evt_id,
 #endif
     // Feeder not available
     std::cerr << "[gatewayd] ERROR: " << signal_name << " (svc=0x" << std::hex << svc_id
-              << ", evt=0x" << evt_id << std::dec
-              << ") received but feeder not initialized" << std::endl;
+              << ", evt=0x" << evt_id << std::dec << ") received but feeder not initialized"
+              << std::endl;
 }
 
 RemoteServiceInstance::RemoteServiceInstance(
@@ -328,7 +328,7 @@ Result<mw::com::FindServiceHandle> RemoteServiceInstance::CreateAsyncRemoteServi
               << service_instance_config->instance_specifier()->string_view() << "\n";
 
     auto someipd_instance_specifier =
-        score::mw::com::InstanceSpecifier::Create(std::string("gatewayd/someipd_messages")).value();
+        score::mw::com::InstanceSpecifier::Create(std::string("someipd/someipd_messages")).value();
 
     // TODO: StartFindService should be modified to handle arbitrarily large lambdas
     // or we need to check whether it is OK to stick with dynamic allocation here.

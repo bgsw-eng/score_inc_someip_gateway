@@ -23,7 +23,10 @@ load("@score_communication//bazel/tools:json_schema_validator.bzl", "validate_js
 # ============================================================================
 cc_binary(
     name = "someipd",
-    srcs = ["main.cpp"],
+    srcs = [
+        "log_backend_link_guard.cpp",
+        "main.cpp",
+    ],
     args = [
         "-service_instance_manifest",
         "$(rootpath etc/mw_com_config.json)",
@@ -31,6 +34,7 @@ cc_binary(
     data = [
         "etc/logging.json",
         "etc/mw_com_config.json",
+        "etc/vsomeip.json",
     ],
     env = {
         "MW_LOG_CONFIG_FILE": "$(rootpath etc/logging.json)",
@@ -40,6 +44,7 @@ cc_binary(
         "//src/network_service:provider",
         "@score_baselibs//score/language/futurecpp",
         "@score_communication//score/mw/com",
+        "@score_baselibs//score/mw/log:console_only_backend",
         "@vsomeip",
     ],
 )

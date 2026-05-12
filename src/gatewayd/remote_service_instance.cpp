@@ -281,6 +281,10 @@ RemoteServiceInstance::RemoteServiceInstance(
             max_sample_count);
     });
 
+    // Wait for someipd's skeleton to be fully ready before subscribing.
+    // The skeleton may not be in a subscribed state immediately after
+    // StartFindService fires — a short delay avoids the "Not Subscribed State" error.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     someip_message_proxy_.message_.Subscribe(max_sample_count);
 }
 

@@ -69,6 +69,8 @@ bazel_dep(name = "bazel_lib", version = "3.2.2", dev_dependency = True)
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "rules_java", version = "8.15.1")
+bazel_dep(name = "zlib", version = "1.3.1.bcr.5")
 bazel_dep(name = "rules_pkg", version = "1.2.0")
 bazel_dep(name = "rules_rust", version = "0.69.0")
 
@@ -76,7 +78,7 @@ bazel_dep(name = "rules_rust", version = "0.69.0")
 # Toolchains & Platform Configuration
 # ============================================================================
 # S-CORE Platform Definitions: Provides constraint values and platform definitions
-bazel_dep(name = "score_bazel_platforms", version = "0.0.4")
+bazel_dep(name = "score_bazel_platforms", version = "0.1.2")
 
 bazel_dep(name = "score_toolchains_rust", version = "0.7.0", dev_dependency = True)
 git_override(
@@ -163,14 +165,14 @@ register_toolchains(
 # ============================================================================
 # Tooling & Development
 # ============================================================================
-bazel_dep(name = "score_tooling", version = "1.0.4", dev_dependency = True)
+bazel_dep(name = "score_tooling", version = "1.1.2", dev_dependency = True)
 bazel_dep(name = "aspect_rules_lint", version = "2.3.0", dev_dependency = True)
 bazel_dep(name = "buildifier_prebuilt", version = "8.5.1", dev_dependency = True)
 
 # ============================================================================
 # Documentation
 # ============================================================================
-bazel_dep(name = "score_docs_as_code", version = "2.3.0", dev_dependency = True)
+bazel_dep(name = "score_docs_as_code", version = "3.0.0", dev_dependency = True)
 
 # ============================================================================
 # Communication Framework
@@ -199,12 +201,7 @@ local_path_override(
 # Patch note: baselibs-multiarch.patch adds multi-arch support for .deb downloads.
 # score_baselibs hardcodes amd64 URLs; patch replaces them with architecture-aware
 # selection (x86_64 or aarch64) based on TARGET_ARCH environment variable.
-bazel_dep(name = "score_baselibs", version = "0.2.2")
-single_version_override(
-    module_name = "score_baselibs",
-    patch_strip = 1,
-    patches = ["//:third_party/baselibs-multiarch.patch"],
-)
+bazel_dep(name = "score_baselibs", version = "0.2.5")
 
 # ============================================================================
 # Code Generation
@@ -216,11 +213,6 @@ bazel_dep(name = "flatbuffers", version = "25.12.19")
 # ============================================================================
 # TRLC (Traceability Language Compiler) for requirements management.
 # Overrides the transitive dependency to pin a verified release.
-git_override(
-    module_name = "trlc",
-    commit = "650b51a47264a4f232b3341f473527710fc32669",  # trlc-2.0.2 release
-    remote = "https://github.com/bmw-software-engineering/trlc.git",
-)
 
 # ============================================================================
 # Examples: Car Window Simulator
@@ -252,6 +244,8 @@ single_version_override(
 )
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "local_repository")
 
 new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
 
@@ -307,11 +301,28 @@ new_local_repository(
     path = "/workspaces/grpc",
 )
 
+new_local_repository(
+    name = "com_github_grpc_grpc_shared",
+    build_file = "@//:third_party/grpc_shared.BUILD",
+    path = "/workspaces/grpc",
+)
+
+local_repository(
+    name = "com_github_absl",
+    path = "/workspaces/grpc/third_party/abseil-cpp",
+)
+
+local_repository(
+    name = "com_github_protobuf",
+    path = "/workspaces/grpc/third_party/protobuf",
+)
+
 # KUKSA Data Broker - uses local wrapper with pre-generated proto headers
 new_local_repository(
     name = "com_kukavalhal_databroker",
     build_file = "@//:third_party/com_kukavalhal_databroker/BUILD.bazel",
-    path = "/workspaces/Score_App/third_party/com_kukavalhal_databroker",
+    path = "/workspaces/score_inc_someip_gateway/third_party/com_kukavalhal_databroker",
 )
 
-bazel_dep(name = "protobuf", version = "34.1")
+# Do not use the BCR protobuf module for the checked-in KUKSA generated files.
+# They compile against the protobuf vendored in the mounted gRPC checkout.

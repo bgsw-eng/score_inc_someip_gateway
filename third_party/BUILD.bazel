@@ -30,13 +30,11 @@ filegroup(
 
 cc_import(
     name = "grpcpp_so",
-  //  shared_library = "//artifacts/grpc_aarch64_final/final_libs:libgrpc++.so.1.51.3",
     visibility = ["//visibility:public"],
 )
 
 cc_import(
     name = "grpc_so",
-   // shared_library = "//artifacts/grpc_aarch64_final/final_libs:libgrpc.so.29.0.0",
     visibility = ["//visibility:public"],
 )
 

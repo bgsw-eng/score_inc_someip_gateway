@@ -22,7 +22,6 @@
 #include <type_traits>
 
 #include "score/mw/com/types.h"
-
 #if defined(ENABLE_KUKSA_BROKER_FEEDER)
 #include "src/gatewayd/kuksa_broker_feeder/collector_client.h"
 #include "src/gatewayd/kuksa_broker_feeder/create_datapoint.h"
@@ -42,6 +41,44 @@ static const std::size_t SOMEIP_FULL_HEADER_SIZE = 16;
 static const char* kSomeipLastServiceIdPath = "Vehicle.Private.Gatewayd.Someip.LastServiceId";
 static const char* kSomeipLastEventIdPath = "Vehicle.Private.Gatewayd.Someip.LastEventId";
 static const char* kSomeipLastPayloadBytePath = "Vehicle.Private.Gatewayd.Someip.LastPayloadByte";
+
+struct ExpectedSomeipSignal {
+    uint16_t service_id;
+    uint16_t event_id;
+    const char* signal_name;
+};
+
+static ExpectedSomeipSignal getExpectedSignal(std::string_view specifier) {
+    if (specifier == "gatewayd/application_rbc_lock_status") {
+        return {0x3003, 0x8002, "LOCK STATUS"};
+    }
+    if (specifier == "gatewayd/application_rbc_hazard_lamp_status") {
+        return {0x3003, 0x8003, "HAZARD LAMP"};
+    }
+    if (specifier == "gatewayd/application_rbc_position_lamp_status") {
+        return {0x3003, 0x8004, "POSITION LAMP"};
+    }
+    if (specifier == "gatewayd/application_rbc_approach_lamp_status") {
+        return {0x3004, 0x8009, "APPROACH LAMP"};
+    }
+    return {0xFFFF, 0xFFFF, "UNKNOWN"};
+}
+
+static const char* getSignalNameByIds(uint16_t svc_id, uint16_t evt_id) {
+    if (svc_id == 0x3003 && evt_id == 0x8002) {
+        return "LOCK STATUS";
+    }
+    if (svc_id == 0x3003 && evt_id == 0x8003) {
+        return "HAZARD LAMP";
+    }
+    if (svc_id == 0x3003 && evt_id == 0x8004) {
+        return "POSITION LAMP";
+    }
+    if (svc_id == 0x3004 && evt_id == 0x8009) {
+        return "APPROACH LAMP";
+    }
+    return "UNKNOWN";
+}
 
 // RBC signal mappings (received from SOME/IP, forwarded directly to KUKSA databroker)
 // LOCK STATUS   (0x3003/0x8002) → Vehicle.Powertrain.ElectricMotor.MU1_Reserved_01
@@ -87,7 +124,10 @@ static void initBrokerFeeder() {
          "RBC hazard lamp from SOME/IP 0x3003/0x8003"},
         {"Vehicle.Powertrain.ElectricMotor.MU1_Reserved_03", sdv::databroker::v1::DataType::UINT32,
          sdv::databroker::v1::ChangeType::ON_CHANGE, sdv::broker_feeder::createNotAvailableValue(),
-         "RBC position lamp from SOME/IP 0x3003/0x8004"},
+         "RBC position lamp from SOME/IP 0x3003/0x8004 (legacy reserved field)"},
+        {"Vehicle.Body.Lights.Parking.IsOn", sdv::databroker::v1::DataType::UINT32,
+         sdv::databroker::v1::ChangeType::ON_CHANGE, sdv::broker_feeder::createNotAvailableValue(),
+         "Standard VSS parking light signal - readable and writable from databroker"},
         {"Vehicle.Powertrain.TractionBattery.DTE.MU2_Reserved01",
          sdv::databroker::v1::DataType::UINT32, sdv::databroker::v1::ChangeType::ON_CHANGE,
          sdv::broker_feeder::createNotAvailableValue(),
@@ -149,14 +189,16 @@ static void writeSomeipToDatabroker(uint16_t svc_id, uint16_t evt_id,
     }
     uint32_t value = static_cast<uint32_t>(static_cast<uint8_t>(payload.data()[0]));
     std::string rbc_vss_path;
+    std::string standard_vss_path;
 
-    // Map SOME/IP service:event to signal key and VSS path
+    // Map SOME/IP service:event to signal key and VSS paths
     if (svc_id == 0x3003 && evt_id == 0x8002) {
         rbc_vss_path = "Vehicle.Powertrain.ElectricMotor.MU1_Reserved_01";
     } else if (svc_id == 0x3003 && evt_id == 0x8003) {
         rbc_vss_path = "Vehicle.Powertrain.ElectricMotor.MU1_Reserved_02";
     } else if (svc_id == 0x3003 && evt_id == 0x8004) {
         rbc_vss_path = "Vehicle.Powertrain.ElectricMotor.MU1_Reserved_03";
+        standard_vss_path = "Vehicle.Body.Lights.Parking.IsOn";  // Map to standard VSS path
     } else if (svc_id == 0x3004 && evt_id == 0x8009) {
         rbc_vss_path = "Vehicle.Powertrain.TractionBattery.DTE.MU2_Reserved01";
     }
@@ -176,6 +218,11 @@ static void writeSomeipToDatabroker(uint16_t svc_id, uint16_t evt_id,
                       << " → KUKSA Databroker" << std::endl;
             broker_feeder->FeedValue(rbc_vss_path, sdv::broker_feeder::createDatapoint(value));
         }
+        if (!standard_vss_path.empty()) {
+            std::cout << "[gatewayd] " << signal_name << " (" << standard_vss_path
+                      << ") = " << value << " → KUKSA Databroker (standard VSS)" << std::endl;
+            broker_feeder->FeedValue(standard_vss_path, sdv::broker_feeder::createDatapoint(value));
+        }
         return;
     }
 #endif
@@ -193,6 +240,8 @@ RemoteServiceInstance::RemoteServiceInstance(
       someip_message_proxy_(std::move(someip_message_proxy)) {
 #if defined(ENABLE_KUKSA_BROKER_FEEDER)
     std::cout << "[gatewayd] KUKSA broker feeder support: ENABLED" << std::endl;
+    // Bring feeder up at startup so connection status is visible even before first RBC status.
+    initBrokerFeeder();
 #else
     std::cout << "[gatewayd] KUKSA broker feeder support: DISABLED (not compiled in)" << std::endl;
 #endif
@@ -217,20 +266,17 @@ RemoteServiceInstance::RemoteServiceInstance(
                 uint16_t evt_id =
                     (static_cast<uint16_t>(message[2]) << 8) | static_cast<uint16_t>(message[3]);
 
+                const auto expected = getExpectedSignal(
+                    service_instance_config_->instance_specifier()->string_view());
+                if (expected.service_id != 0xFFFF &&
+                    (svc_id != expected.service_id || evt_id != expected.event_id)) {
+                    return;
+                }
+
                 // TODO: Check service id, method id, etc. Maybe do that in the dispatcher already?
                 auto payload = message.subspan(SOMEIP_FULL_HEADER_SIZE);
 
-                const char* signal_name = "UNKNOWN";
-
-                if (svc_id == 0x3003 && evt_id == 0x8002) {
-                    signal_name = "LOCK STATUS";
-                } else if (svc_id == 0x3003 && evt_id == 0x8003) {
-                    signal_name = "HAZARD LAMP";
-                } else if (svc_id == 0x3003 && evt_id == 0x8004) {
-                    signal_name = "POSITION LAMP";
-                } else if (svc_id == 0x3004 && evt_id == 0x8009) {
-                    signal_name = "APPROACH LAMP";
-                }
+                const char* signal_name = getSignalNameByIds(svc_id, evt_id);
 
                 // TODO: deserialization
                 std::visit(
@@ -270,7 +316,6 @@ RemoteServiceInstance::RemoteServiceInstance(
                                         : static_cast<int>(static_cast<uint8_t>(payload.data()[0])))
                                 << std::endl;
                             skel.event_.Send(std::move(sample));
-
                         }
                     },
                     ipc_skeleton_);
@@ -305,9 +350,16 @@ Result<mw::com::FindServiceHandle> RemoteServiceInstance::CreateAsyncRemoteServi
         std::cerr << "ERROR: Service instance config is nullptr!" << std::endl;
         return MakeUnexpected(mw::com::impl::ComErrc::kInvalidConfiguration);
     }
-    auto ipc_instance_specifier = score::mw::com::InstanceSpecifier::Create(
-                                      service_instance_config->instance_specifier()->str())
-                                      .value();
+    auto ipc_instance_specifier_result = score::mw::com::InstanceSpecifier::Create(
+        service_instance_config->instance_specifier()->str());
+    if (!ipc_instance_specifier_result.has_value()) {
+        std::cerr << "ERROR: Failed to resolve remote instance specifier '"
+                  << service_instance_config->instance_specifier()->string_view()
+                  << "'. The deployed mw_com_config.json likely does not contain this entry."
+                  << std::endl;
+        return MakeUnexpected(mw::com::impl::ComErrc::kInvalidConfiguration);
+    }
+    auto ipc_instance_specifier = std::move(ipc_instance_specifier_result).value();
 
     const std::string_view specifier = service_instance_config->instance_specifier()->string_view();
     IpcSkeleton ipc_skeleton = [&]() -> IpcSkeleton {
@@ -327,8 +379,15 @@ Result<mw::com::FindServiceHandle> RemoteServiceInstance::CreateAsyncRemoteServi
     std::cout << "Starting discovery of remote service: "
               << service_instance_config->instance_specifier()->string_view() << "\n";
 
-    auto someipd_instance_specifier =
-        score::mw::com::InstanceSpecifier::Create(std::string("someipd/someipd_messages")).value();
+    auto someipd_instance_specifier_result =
+        score::mw::com::InstanceSpecifier::Create(std::string("someipd/someipd_messages"));
+    if (!someipd_instance_specifier_result.has_value()) {
+        std::cerr
+            << "ERROR: Failed to resolve required instance specifier 'someipd/someipd_messages'."
+            << std::endl;
+        return MakeUnexpected(mw::com::impl::ComErrc::kInvalidConfiguration);
+    }
+    auto someipd_instance_specifier = std::move(someipd_instance_specifier_result).value();
 
     // TODO: StartFindService should be modified to handle arbitrarily large lambdas
     // or we need to check whether it is OK to stick with dynamic allocation here.

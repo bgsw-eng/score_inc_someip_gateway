@@ -12,6 +12,7 @@
  ********************************************************************************/
 
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <fstream>
 #include <iostream>
@@ -37,6 +38,60 @@ static std::atomic<bool> shutdown_requested{false};
 void termination_handler(int /*signal*/) {
     std::cout << "Received termination signal. Initiating graceful shutdown..." << std::endl;
     shutdown_requested.store(true);
+}
+
+bool SendLampCommand(SomeipMessageTransferSkeleton& someip_message_skeleton,
+                     std::uint16_t service_id, std::uint16_t method_id, std::uint8_t state,
+                     const char* lamp_name) {
+    auto maybe_message = someip_message_skeleton.message_.Allocate();
+    if (!maybe_message.has_value()) {
+        std::cerr << "[gatewayd] ERROR: Failed to allocate SOME/IP message for " << lamp_name
+                  << ": " << maybe_message.error().Message() << std::endl;
+        return false;
+    }
+
+    auto message_sample = std::move(maybe_message).value();
+    std::byte* message_data = message_sample->data;
+    std::size_t pos = 0;
+
+    message_data[pos++] = static_cast<std::byte>(service_id >> 8);
+    message_data[pos++] = static_cast<std::byte>(service_id & 0xFF);
+
+    message_data[pos++] = static_cast<std::byte>(method_id >> 8);
+    message_data[pos++] = static_cast<std::byte>(method_id & 0xFF);
+
+    // Length is filled by someipd, keep 4-byte placeholder.
+    pos += 4;
+
+    const std::uint16_t client_id = 0xFFFF;
+    message_data[pos++] = static_cast<std::byte>(client_id >> 8);
+    message_data[pos++] = static_cast<std::byte>(client_id & 0xFF);
+
+    const std::uint16_t session_id = 0x0000;
+    message_data[pos++] = static_cast<std::byte>(session_id >> 8);
+    message_data[pos++] = static_cast<std::byte>(session_id & 0xFF);
+
+    const std::uint8_t protocol_version = 1;
+    message_data[pos++] = static_cast<std::byte>(protocol_version);
+
+    const std::uint8_t interface_version = 0x01;
+    message_data[pos++] = static_cast<std::byte>(interface_version);
+
+    const std::uint8_t message_type = 0x02;  // NOTIFICATION/EVENT
+    message_data[pos++] = static_cast<std::byte>(message_type);
+
+    const std::uint8_t return_code = 0x00;
+    message_data[pos++] = static_cast<std::byte>(return_code);
+
+    message_data[pos++] = static_cast<std::byte>(state);
+    message_sample->size = pos;
+
+    someip_message_skeleton.message_.Send(std::move(message_sample));
+
+    std::cout << "[gatewayd] ✓ " << lamp_name << " command sent"
+              << " (service=0x" << std::hex << service_id << ", method=0x" << method_id
+              << ", payload=0x" << static_cast<int>(state) << std::dec << ")" << std::endl;
+    return true;
 }
 
 int main(int argc, const char* argv[]) {
@@ -93,9 +148,17 @@ int main(int argc, const char* argv[]) {
 
     std::vector<std::unique_ptr<LocalServiceInstance>> local_service_instances;
     for (auto service_instance_config : *config->local_service_instances()) {
-        LocalServiceInstance::CreateAsyncLocalService(
+        const auto instance_name = service_instance_config->instance_specifier()->string_view();
+        std::cout << "[gatewayd] Local discovery init: " << instance_name << std::endl;
+        auto local_find_result = LocalServiceInstance::CreateAsyncLocalService(
             std::shared_ptr<const config::ServiceInstance>(config, service_instance_config),
             someip_message_skeleton, local_service_instances);
+        if (!local_find_result.has_value()) {
+            std::cerr << "[gatewayd] Local discovery start failed for " << instance_name
+                      << std::endl;
+        } else {
+            std::cout << "[gatewayd] Local discovery started for " << instance_name << std::endl;
+        }
     }
 
     // Create service instances from configuration
@@ -106,16 +169,24 @@ int main(int argc, const char* argv[]) {
 
     std::vector<std::unique_ptr<RemoteServiceInstance>> remote_service_instances;
     for (auto service_instance_config : *config->remote_service_instances()) {
-        RemoteServiceInstance::CreateAsyncRemoteService(
+        const auto instance_name = service_instance_config->instance_specifier()->string_view();
+        std::cout << "[gatewayd] Remote discovery init: " << instance_name << std::endl;
+        auto remote_find_result = RemoteServiceInstance::CreateAsyncRemoteService(
             std::shared_ptr<const config::ServiceInstance>(config, service_instance_config),
             remote_service_instances);
+        if (!remote_find_result.has_value()) {
+            std::cerr << "[gatewayd] Remote discovery start failed for " << instance_name
+                      << std::endl;
+        } else {
+            std::cout << "[gatewayd] Remote discovery started for " << instance_name << std::endl;
+        }
     }
 
     std::cout << "Gateway started, waiting for shutdown signal..." << std::endl;
 
-    // Main loop - run until shutdown is requested
+    // Main loop - command flow is event-driven via IPC and databroker subscriptions.
     while (!shutdown_requested.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     std::cout << "Shutting down gateway..." << std::endl;

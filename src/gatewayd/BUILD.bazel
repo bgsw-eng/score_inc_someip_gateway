@@ -43,14 +43,23 @@ config_setting(
 cc_binary(
     name = "gatewayd",
     srcs = ["main.cpp"],
+    data = [
+        "etc/gatewayd_config.json",
+        "etc/logging.json",
+        "etc/mw_com_config.json",
+    ],
+    defines = select({
+        ":aarch64_linux": ["ENABLE_KUKSA_BROKER_FEEDER"],
+        "//conditions:default": ["ENABLE_KUKSA_BROKER_FEEDER"],
+    }),
     visibility = ["//visibility:public"],
     deps = [
         ":config_flatbuffers",
         ":local_service_instance",
         ":remote_service_instance",
         "//src/network_service:consumer",
+        "//src/rbc:car_lock_unlock_service",
         "@score_communication//score/mw/com",
-        "@score_baselibs//score/mw/log:console_only_backend",
     ] + select({
         ":aarch64_linux": [
             "//src/gatewayd/kuksa_broker_feeder:collector_client",
@@ -69,11 +78,28 @@ cc_library(
     name = "local_service_instance",
     srcs = ["local_service_instance.cpp"],
     hdrs = ["local_service_instance.h"],
+    defines = select({
+        ":aarch64_linux": ["ENABLE_KUKSA_BROKER_FEEDER"],
+        "//conditions:default": ["ENABLE_KUKSA_BROKER_FEEDER"],
+    }),
     deps = [
         ":config_flatbuffers",
         "//src/network_service:consumer",
         "@score_communication//score/mw/com",
-    ],
+    ] + select({
+        ":aarch64_linux": [
+            "//src/gatewayd/kuksa_broker_feeder:collector_client",
+            "//src/gatewayd/kuksa_broker_feeder:data_broker_feeder",
+            "@com_github_grpc_grpc//:grpc++_public",
+            "@com_kukavalhal_databroker//:val_cc_proto",
+        ],
+        "//conditions:default": [
+            "//src/gatewayd/kuksa_broker_feeder:collector_client",
+            "//src/gatewayd/kuksa_broker_feeder:data_broker_feeder",
+            "@com_github_grpc_grpc//:grpc++_public",
+            "@com_kukavalhal_databroker//:val_cc_proto",
+        ],
+    }),
 )
 
 cc_library(

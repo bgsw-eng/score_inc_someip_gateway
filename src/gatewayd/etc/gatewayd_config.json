@@ -1,18 +1,34 @@
 {
     "local_service_instances": [
         {
-            "instance_specifier": "gatewayd/application_window_control",
+            "instance_specifier": "gatewayd/application_rbc_lock_unlock_cmd",
             "events": [
                 {
-                    "event_name": "window_control"
+                    "event_name": "rbc_car_lock_unlock_cmd"
                 }
             ]
         },
         {
-            "instance_specifier": "gatewayd/application_echo_request",
+            "instance_specifier": "gatewayd/application_rbc_hazard_lamp_cmd",
             "events": [
                 {
-                    "event_name": "echo_request_tiny"
+                    "event_name": "rbc_hazard_lamp_on_off_cmd"
+                }
+            ]
+        },
+        {
+            "instance_specifier": "gatewayd/application_rbc_approach_lamp_cmd",
+            "events": [
+                {
+                    "event_name": "rbc_approach_lamp_on_off_cmd"
+                }
+            ]
+        },
+        {
+            "instance_specifier": "gatewayd/application_rbc_position_lamp_cmd",
+            "events": [
+                {
+                    "event_name": "rbc_position_lamp_on_off_cmd"
                 }
             ]
         }

@@ -63,6 +63,31 @@ struct ApproachLampStatus {
 };
 DEFINE_RBC_SINGLE_EVENT_SERVICE(ApproachLampStatus, ApproachLampStatus, "mu2_reserved01")
 
+// ---------------------------------------------------------------------------
+// Event: RBC_IH_Approach_Lamp_On_Off_Cmd — Approach lamp on/off command (Service 0x4004, Method
+// 0x8002)
+struct ApproachLampCommand {
+    uint8_t command;  // 0 = OFF, 1 = ON
+};
+DEFINE_RBC_SINGLE_EVENT_SERVICE(ApproachLampCommand, ApproachLampCommand,
+                                "RBC_IH_Approach_Lamp_On_Off_Cmd")
+
+// ---------------------------------------------------------------------------
+// Event: RBC_IH_Hazard_Lamp_On_Off_Cmd — Hazard lamp on/off command (Service 0x4004, Method 0x8001)
+struct HazardLampCommand {
+    uint8_t command;  // 0 = OFF, 1 = ON
+};
+DEFINE_RBC_SINGLE_EVENT_SERVICE(HazardLampCommand, HazardLampCommand,
+                                "RBC_IH_Hazard_Lamp_On_Off_Cmd")
+
+// ---------------------------------------------------------------------------
+// Event: RBC_IH_Car_Lock_Unlock_Cmd — Car lock/unlock command (Service 0x4003, Method 0x8001)
+struct CarLockUnlockCommand {
+    uint8_t command;  // 0 = UNLOCK, 1 = LOCK
+};
+DEFINE_RBC_SINGLE_EVENT_SERVICE(CarLockUnlockCommand, CarLockUnlockCommand,
+                                "rbc_car_lock_unlock_cmd")
+
 }  // namespace rbc_service
 
 #endif  // SRC_RBC_CAR_LOCK_UNLOCK_SERVICE

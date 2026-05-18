@@ -18,6 +18,11 @@
 #include <memory>
 
 #include "score/mw/com/types.h"
+#if defined(ENABLE_KUKSA_BROKER_FEEDER)
+#include "kuksa/val/v1/types.pb.h"
+#include "kuksa/val/v1/val.pb.h"
+
+#endif
 
 using score::mw::com::GenericProxy;
 using score::mw::com::SamplePtr;
@@ -27,6 +32,334 @@ namespace score::someip_gateway::gatewayd {
 using network_service::interfaces::message_transfer::SomeipMessageTransferSkeleton;
 
 static const std::size_t max_sample_count = 10;
+
+#if defined(ENABLE_KUKSA_BROKER_FEEDER)
+static const char* kParkingLightPath = "Vehicle.Body.Lights.Parking.IsOn";
+static const char* kHazardLampPath = "Vehicle.Body.Lights.Hazard.IsSignaling";
+static const char* kApproachLampPath = "Vehicle.Body.Trunk.Front.IsLightOn";
+static std::once_flag parking_subscriber_once;
+static std::atomic<bool> parking_subscriber_active{false};
+static std::shared_ptr<std::thread> parking_subscriber_thread;
+static std::once_flag hazard_subscriber_once;
+static std::atomic<bool> hazard_subscriber_active{false};
+static std::shared_ptr<std::thread> hazard_subscriber_thread;
+static std::once_flag approach_subscriber_once;
+static std::atomic<bool> approach_subscriber_active{false};
+static std::shared_ptr<std::thread> approach_subscriber_thread;
+
+struct BrokerSignalSubscriptionConfig {
+    const char* path;
+    uint16_t service_id;
+    uint16_t method_id;
+    const char* label;
+};
+
+static void subscribeToBrokerSignalStandalone(
+    SomeipMessageTransferSkeleton& someip_message_skeleton,
+    const BrokerSignalSubscriptionConfig& config, std::atomic<bool>& active_flag) {
+    const std::string broker_addr =
+        std::getenv("BROKER_ADDR") ? std::getenv("BROKER_ADDR") : "localhost:55555";
+    const std::string broker_token = std::getenv("BROKER_TOKEN") ? std::getenv("BROKER_TOKEN") : "";
+
+    std::cout << "[gatewayd] " << config.label << " subscriber connecting to databroker at "
+              << broker_addr << std::endl;
+
+    auto collector_client =
+        sdv::broker_feeder::CollectorClient::createInstance(broker_addr, broker_token);
+    if (!collector_client) {
+        std::cerr << "[gatewayd] Failed to create collector client for " << config.label
+                  << " databroker subscription" << std::endl;
+        return;
+    }
+
+    auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(5);
+    const bool connected = collector_client->WaitForConnected(deadline);
+    std::cout << "[gatewayd] " << config.label << " subscriber WaitForConnected=" << connected
+              << std::endl;
+    if (!connected) {
+        std::cerr << "[gatewayd] Failed to connect to databroker at " << broker_addr << " for "
+                  << config.label << std::endl;
+        return;
+    }
+
+    kuksa::val::v1::SubscribeRequest subscribe_request;
+    auto* entry = subscribe_request.add_entries();
+    entry->set_path(config.path);
+    entry->set_view(kuksa::val::v1::VIEW_ALL);
+    entry->add_fields(kuksa::val::v1::FIELD_VALUE);
+    entry->add_fields(kuksa::val::v1::FIELD_ACTUATOR_TARGET);
+
+    auto subscriber_context = collector_client->createClientContext();
+    std::cout << "[gatewayd] Sending Subscribe request for " << config.path << std::endl;
+    auto reader = collector_client->Subscribe(subscriber_context.get(), subscribe_request);
+
+    if (!reader) {
+        std::cerr << "[gatewayd] Failed to create subscriber for " << config.path << std::endl;
+        return;
+    }
+
+    std::cout << "[gatewayd] Subscribed to " << config.path << " from databroker" << std::endl;
+
+    kuksa::val::v1::SubscribeResponse response;
+    while (active_flag && reader->Read(&response)) {
+        std::cout << "[gatewayd] Databroker subscription message received for " << config.label
+                  << " with " << response.updates().size() << " update(s)" << std::endl;
+        for (const auto& update : response.updates()) {
+            std::cout << "[gatewayd] Databroker update path=" << update.entry().path()
+                      << " has_value=" << update.entry().has_value() << std::endl;
+            if (update.entry().path() != config.path) {
+                continue;
+            }
+
+            uint32_t value = 0;
+            bool has_datapoint = false;
+            const auto* datapoint = &update.entry().value();
+            if (update.entry().has_value()) {
+                has_datapoint = true;
+                datapoint = &update.entry().value();
+            } else if (update.entry().has_actuator_target()) {
+                has_datapoint = true;
+                datapoint = &update.entry().actuator_target();
+                std::cout << "[gatewayd] Databroker update uses actuator_target for "
+                          << config.label << std::endl;
+            }
+
+            if (!has_datapoint) {
+                std::cout << "[gatewayd] Databroker update has no value/actuator_target for "
+                          << config.label << std::endl;
+                continue;
+            }
+
+            if (datapoint->has_uint32()) {
+                value = datapoint->uint32();
+                std::cout << "[gatewayd] Databroker value type=uint32 value=" << value << std::endl;
+            } else if (datapoint->has_bool_()) {
+                value = datapoint->bool_() ? 1 : 0;
+                std::cout << "[gatewayd] Databroker value type=bool value=" << value << std::endl;
+            } else {
+                std::cout << "[gatewayd] Databroker value type is unsupported for " << config.label
+                          << std::endl;
+                continue;
+            }
+
+            std::cout << "[gatewayd] " << config.label << " update from databroker: " << value
+                      << " -> Sending to SOME/IP" << std::endl;
+
+            auto maybe_message = someip_message_skeleton.message_.Allocate();
+            if (!maybe_message.has_value()) {
+                std::cerr << "[gatewayd] Failed to allocate SOME/IP message" << std::endl;
+                continue;
+            }
+
+            auto message_sample = std::move(maybe_message).value();
+            score::cpp::span<std::byte> message(
+                message_sample->data,
+                network_service::interfaces::message_transfer::MAX_MESSAGE_SIZE);
+
+            std::size_t pos = 0;
+            message.data()[pos++] = static_cast<std::byte>(config.service_id >> 8);
+            message.data()[pos++] = static_cast<std::byte>(config.service_id & 0xFF);
+            message.data()[pos++] = static_cast<std::byte>(config.method_id >> 8);
+            message.data()[pos++] = static_cast<std::byte>(config.method_id & 0xFF);
+            pos += 4;
+
+            std::uint16_t client_id = 0xFFFF;
+            message.data()[pos++] = static_cast<std::byte>(client_id >> 8);
+            message.data()[pos++] = static_cast<std::byte>(client_id & 0xFF);
+
+            std::uint16_t session_id = 0x0001;
+            message.data()[pos++] = static_cast<std::byte>(session_id >> 8);
+            message.data()[pos++] = static_cast<std::byte>(session_id & 0xFF);
+
+            message.data()[pos++] = static_cast<std::byte>(0x01);
+            message.data()[pos++] = static_cast<std::byte>(0x01);
+            message.data()[pos++] = static_cast<std::byte>(0x01);
+            message.data()[pos++] = static_cast<std::byte>(0x00);
+            message.data()[pos++] = static_cast<std::byte>(value & 0xFF);
+            message_sample->size = pos;
+            someip_message_skeleton.message_.Send(std::move(message_sample));
+        }
+    }
+
+    const auto status = reader->Finish();
+    std::cout << "[gatewayd] " << config.label << " subscriber finished: ok=" << status.ok()
+              << " code=" << status.error_code() << " message=" << status.error_message()
+              << std::endl;
+}
+
+static void subscribeToParkingLightSignalStandalone(
+    SomeipMessageTransferSkeleton& someip_message_skeleton) {
+    const std::string broker_addr =
+        std::getenv("BROKER_ADDR") ? std::getenv("BROKER_ADDR") : "localhost:55555";
+    const std::string broker_token = std::getenv("BROKER_TOKEN") ? std::getenv("BROKER_TOKEN") : "";
+
+    std::cout << "[gatewayd] Parking light subscriber connecting to databroker at " << broker_addr
+              << std::endl;
+
+    auto collector_client =
+        sdv::broker_feeder::CollectorClient::createInstance(broker_addr, broker_token);
+    if (!collector_client) {
+        std::cerr << "[gatewayd] Failed to create collector client for databroker subscription"
+                  << std::endl;
+        return;
+    }
+
+    auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(5);
+    const bool connected = collector_client->WaitForConnected(deadline);
+    std::cout << "[gatewayd] Parking light subscriber WaitForConnected=" << connected << std::endl;
+    if (!connected) {
+        std::cerr << "[gatewayd] Failed to connect to databroker at " << broker_addr << std::endl;
+        return;
+    }
+
+    kuksa::val::v1::SubscribeRequest subscribe_request;
+    auto* entry = subscribe_request.add_entries();
+    entry->set_path(kParkingLightPath);
+    entry->set_view(kuksa::val::v1::VIEW_ALL);
+    entry->add_fields(kuksa::val::v1::FIELD_VALUE);
+    entry->add_fields(kuksa::val::v1::FIELD_ACTUATOR_TARGET);
+
+    auto subscriber_context = collector_client->createClientContext();
+    std::cout << "[gatewayd] Sending Subscribe request for " << kParkingLightPath << std::endl;
+    auto reader = collector_client->Subscribe(subscriber_context.get(), subscribe_request);
+
+    if (!reader) {
+        std::cerr << "[gatewayd] Failed to create subscriber for " << kParkingLightPath
+                  << std::endl;
+        return;
+    }
+
+    std::cout << "[gatewayd] Subscribed to " << kParkingLightPath << " from databroker"
+              << std::endl;
+
+    kuksa::val::v1::SubscribeResponse response;
+    while (parking_subscriber_active && reader->Read(&response)) {
+        std::cout << "[gatewayd] Databroker subscription message received with "
+                  << response.updates().size() << " update(s)" << std::endl;
+        for (const auto& update : response.updates()) {
+            std::cout << "[gatewayd] Databroker update path=" << update.entry().path()
+                      << " has_value=" << update.entry().has_value() << std::endl;
+            if (update.entry().path() == kParkingLightPath) {
+                uint32_t value = 0;
+                bool has_datapoint = false;
+                const auto* datapoint = &update.entry().value();
+                if (update.entry().has_value()) {
+                    has_datapoint = true;
+                    datapoint = &update.entry().value();
+                } else if (update.entry().has_actuator_target()) {
+                    has_datapoint = true;
+                    datapoint = &update.entry().actuator_target();
+                    std::cout << "[gatewayd] Databroker update uses actuator_target" << std::endl;
+                }
+
+                if (!has_datapoint) {
+                    std::cout << "[gatewayd] Databroker update has no value/actuator_target"
+                              << std::endl;
+                    continue;
+                }
+
+                if (datapoint->has_uint32()) {
+                    value = datapoint->uint32();
+                    std::cout << "[gatewayd] Databroker value type=uint32 value=" << value
+                              << std::endl;
+                } else if (datapoint->has_bool_()) {
+                    value = datapoint->bool_() ? 1 : 0;
+                    std::cout << "[gatewayd] Databroker value type=bool value=" << value
+                              << std::endl;
+                } else {
+                    std::cout << "[gatewayd] Databroker value type is unsupported for parking light"
+                              << std::endl;
+                    continue;
+                }
+
+                std::cout << "[gatewayd] Parking light update from databroker: " << value
+                          << " -> Sending to SOME/IP (service 0x7506)" << std::endl;
+
+                auto maybe_message = someip_message_skeleton.message_.Allocate();
+                if (!maybe_message.has_value()) {
+                    std::cerr << "[gatewayd] Failed to allocate SOME/IP message" << std::endl;
+                    continue;
+                }
+
+                auto message_sample = std::move(maybe_message).value();
+                score::cpp::span<std::byte> message(
+                    message_sample->data,
+                    network_service::interfaces::message_transfer::MAX_MESSAGE_SIZE);
+
+                std::size_t pos = 0;
+
+                std::uint16_t service_id = 0x7506;
+                message.data()[pos++] = static_cast<std::byte>(service_id >> 8);
+                message.data()[pos++] = static_cast<std::byte>(service_id & 0xFF);
+
+                std::uint16_t method_id = 0x0001;
+                message.data()[pos++] = static_cast<std::byte>(method_id >> 8);
+                message.data()[pos++] = static_cast<std::byte>(method_id & 0xFF);
+
+                pos += 4;
+
+                std::uint16_t client_id = 0xFFFF;
+                message.data()[pos++] = static_cast<std::byte>(client_id >> 8);
+                message.data()[pos++] = static_cast<std::byte>(client_id & 0xFF);
+
+                std::uint16_t session_id = 0x0001;
+                message.data()[pos++] = static_cast<std::byte>(session_id >> 8);
+                message.data()[pos++] = static_cast<std::byte>(session_id & 0xFF);
+
+                message.data()[pos++] = static_cast<std::byte>(0x01);
+                message.data()[pos++] = static_cast<std::byte>(0x01);
+                message.data()[pos++] = static_cast<std::byte>(0x01);
+                message.data()[pos++] = static_cast<std::byte>(0x00);
+
+                message.data()[pos++] = static_cast<std::byte>(value & 0xFF);
+                message_sample->size = pos;
+                someip_message_skeleton.message_.Send(std::move(message_sample));
+            }
+        }
+    }
+
+    const auto status = reader->Finish();
+    std::cout << "[gatewayd] Parking light subscriber finished: ok=" << status.ok()
+              << " code=" << status.error_code() << " message=" << status.error_message()
+              << std::endl;
+}
+
+static void startParkingSubscriberOnce(SomeipMessageTransferSkeleton& someip_message_skeleton) {
+    std::call_once(parking_subscriber_once, [&someip_message_skeleton]() {
+        std::cout << "[gatewayd] Starting parking light databroker subscriber thread" << std::endl;
+        parking_subscriber_active = true;
+        parking_subscriber_thread = std::make_shared<std::thread>([&someip_message_skeleton]() {
+            subscribeToParkingLightSignalStandalone(someip_message_skeleton);
+        });
+    });
+}
+
+static void startHazardSubscriberOnce(SomeipMessageTransferSkeleton& someip_message_skeleton) {
+    std::call_once(hazard_subscriber_once, [&someip_message_skeleton]() {
+        static const BrokerSignalSubscriptionConfig kHazardConfig = {kHazardLampPath, 0x4004,
+                                                                     0x8001, "Hazard lamp"};
+        std::cout << "[gatewayd] Starting hazard lamp databroker subscriber thread" << std::endl;
+        hazard_subscriber_active = true;
+        hazard_subscriber_thread = std::make_shared<std::thread>([&someip_message_skeleton]() {
+            subscribeToBrokerSignalStandalone(someip_message_skeleton, kHazardConfig,
+                                              hazard_subscriber_active);
+        });
+    });
+}
+
+static void startApproachSubscriberOnce(SomeipMessageTransferSkeleton& someip_message_skeleton) {
+    std::call_once(approach_subscriber_once, [&someip_message_skeleton]() {
+        static const BrokerSignalSubscriptionConfig kApproachConfig = {kApproachLampPath, 0x4004,
+                                                                       0x8002, "Approach lamp"};
+        std::cout << "[gatewayd] Starting approach lamp databroker subscriber thread" << std::endl;
+        approach_subscriber_active = true;
+        approach_subscriber_thread = std::make_shared<std::thread>([&someip_message_skeleton]() {
+            subscribeToBrokerSignalStandalone(someip_message_skeleton, kApproachConfig,
+                                              approach_subscriber_active);
+        });
+    });
+}
+#endif
 
 LocalServiceInstance::LocalServiceInstance(
     std::shared_ptr<const config::ServiceInstance> service_instance_config,
@@ -117,6 +450,169 @@ LocalServiceInstance::LocalServiceInstance(
     }
 }
 
+#if defined(ENABLE_KUKSA_BROKER_FEEDER)
+void LocalServiceInstance::startBrokerSubscriber() {
+    std::cout << "[gatewayd] Starting parking light databroker subscriber thread" << std::endl;
+    subscriber_active_ = true;
+    broker_subscriber_thread_ =
+        std::make_shared<std::thread>([this]() { subscribeToParkingLightSignal(); });
+}
+
+void LocalServiceInstance::subscribeToParkingLightSignal() {
+    const std::string broker_addr =
+        std::getenv("BROKER_ADDR") ? std::getenv("BROKER_ADDR") : "localhost:55555";
+    const std::string broker_token = std::getenv("BROKER_TOKEN") ? std::getenv("BROKER_TOKEN") : "";
+
+    std::cout << "[gatewayd] Parking light subscriber connecting to databroker at " << broker_addr
+              << std::endl;
+
+    auto collector_client =
+        sdv::broker_feeder::CollectorClient::createInstance(broker_addr, broker_token);
+    if (!collector_client) {
+        std::cerr << "[gatewayd] Failed to create collector client for databroker subscription"
+                  << std::endl;
+        return;
+    }
+
+    auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(5);
+    const bool connected = collector_client->WaitForConnected(deadline);
+    std::cout << "[gatewayd] Parking light subscriber WaitForConnected=" << connected << std::endl;
+    if (!connected) {
+        std::cerr << "[gatewayd] Failed to connect to databroker at " << broker_addr << std::endl;
+        return;
+    }
+
+    // Subscribe to parking light signal
+    kuksa::val::v1::SubscribeRequest subscribe_request;
+    auto* entry = subscribe_request.add_entries();
+    entry->set_path("Vehicle.Body.Lights.Parking.IsOn");
+    entry->set_view(kuksa::val::v1::VIEW_ALL);
+    entry->add_fields(kuksa::val::v1::FIELD_VALUE);
+    entry->add_fields(kuksa::val::v1::FIELD_ACTUATOR_TARGET);
+
+    auto subscriber_context = collector_client->createClientContext();
+    std::cout << "[gatewayd] Sending Subscribe request for Vehicle.Body.Lights.Parking.IsOn"
+              << std::endl;
+    auto reader = collector_client->Subscribe(subscriber_context.get(), subscribe_request);
+
+    if (!reader) {
+        std::cerr << "[gatewayd] Failed to create subscriber for Vehicle.Body.Lights.Parking.IsOn"
+                  << std::endl;
+        return;
+    }
+
+    std::cout << "[gatewayd] Subscribed to Vehicle.Body.Lights.Parking.IsOn from databroker"
+              << std::endl;
+
+    kuksa::val::v1::SubscribeResponse response;
+    while (subscriber_active_ && reader->Read(&response)) {
+        std::cout << "[gatewayd] Databroker subscription message received with "
+                  << response.updates().size() << " update(s)" << std::endl;
+        for (const auto& update : response.updates()) {
+            std::cout << "[gatewayd] Databroker update path=" << update.entry().path()
+                      << " has_value=" << update.entry().has_value() << std::endl;
+            if (update.entry().path() == "Vehicle.Body.Lights.Parking.IsOn") {
+                // Extract boolean/uint32 value from value or actuator_target
+                uint32_t value = 0;
+                bool has_datapoint = false;
+                const auto* datapoint = &update.entry().value();
+                if (update.entry().has_value()) {
+                    has_datapoint = true;
+                    datapoint = &update.entry().value();
+                } else if (update.entry().has_actuator_target()) {
+                    has_datapoint = true;
+                    datapoint = &update.entry().actuator_target();
+                    std::cout << "[gatewayd] Databroker update uses actuator_target" << std::endl;
+                }
+
+                if (!has_datapoint) {
+                    std::cout << "[gatewayd] Databroker update has no value/actuator_target"
+                              << std::endl;
+                    continue;
+                }
+
+                if (datapoint->has_uint32()) {
+                    value = datapoint->uint32();
+                    std::cout << "[gatewayd] Databroker value type=uint32 value=" << value
+                              << std::endl;
+                } else if (datapoint->has_bool_()) {
+                    value = datapoint->bool_() ? 1 : 0;
+                    std::cout << "[gatewayd] Databroker value type=bool value=" << value
+                              << std::endl;
+                } else {
+                    std::cout << "[gatewayd] Databroker value type is unsupported for parking light"
+                              << std::endl;
+                    continue;
+                }
+
+                std::cout << "[gatewayd] Parking light update from databroker: " << value
+                          << " → Sending to SOME/IP (service 0x7506)" << std::endl;
+
+                // Send SOME/IP command to turn on/off parking lamp
+                auto maybe_message = someip_message_skeleton_.message_.Allocate();
+                if (!maybe_message.has_value()) {
+                    std::cerr << "[gatewayd] Failed to allocate SOME/IP message" << std::endl;
+                    continue;
+                }
+
+                auto message_sample = std::move(maybe_message).value();
+                score::cpp::span<std::byte> message(
+                    message_sample->data,
+                    network_service::interfaces::message_transfer::MAX_MESSAGE_SIZE);
+
+                std::size_t pos = 0;
+
+                // SOME/IP Header: Service 0x7506 (Position Lamp Command)
+                std::uint16_t service_id = 0x7506;
+                message.data()[pos++] = static_cast<std::byte>(service_id >> 8);
+                message.data()[pos++] = static_cast<std::byte>(service_id & 0xFF);
+
+                // Method ID
+                std::uint16_t method_id = 0x0001;
+                message.data()[pos++] = static_cast<std::byte>(method_id >> 8);
+                message.data()[pos++] = static_cast<std::byte>(method_id & 0xFF);
+
+                // Length placeholder
+                pos += 4;
+
+                // Client ID, Session ID
+                std::uint16_t client_id = 0xFFFF;
+                message.data()[pos++] = static_cast<std::byte>(client_id >> 8);
+                message.data()[pos++] = static_cast<std::byte>(client_id & 0xFF);
+
+                std::uint16_t session_id = 0x0001;
+                message.data()[pos++] = static_cast<std::byte>(session_id >> 8);
+                message.data()[pos++] = static_cast<std::byte>(session_id & 0xFF);
+
+                // Protocol/Interface version
+                message.data()[pos++] = static_cast<std::byte>(0x01);  // Protocol version
+                message.data()[pos++] = static_cast<std::byte>(0x01);  // Interface version
+                message.data()[pos++] = static_cast<std::byte>(0x01);  // Message type (REQUEST)
+                message.data()[pos++] = static_cast<std::byte>(0x00);  // Return code
+
+                // Payload: 1-byte position lamp status
+                message.data()[pos++] = static_cast<std::byte>(value & 0xFF);
+                pos += 1;
+
+                message_sample->size = pos;
+                someip_message_skeleton_.message_.Send(std::move(message_sample));
+            }
+        }
+    }
+
+    const auto status = reader->Finish();
+    std::cout << "[gatewayd] Parking light subscriber finished: ok=" << status.ok()
+              << " code=" << status.error_code() << " message=" << status.error_message()
+              << std::endl;
+
+    subscriber_active_ = false;
+    std::cout << "[gatewayd] Databroker subscriber stopped" << std::endl;
+}
+#endif
+
+}  // namespace score::someip_gateway::gatewayd
+
+namespace score::someip_gateway::gatewayd {
 namespace {
 struct FindServiceContext {
     std::shared_ptr<const config::ServiceInstance> config;
@@ -139,9 +635,35 @@ Result<mw::com::FindServiceHandle> LocalServiceInstance::CreateAsyncLocalService
         std::cerr << "ERROR: Service instance config is nullptr!" << std::endl;
         return MakeUnexpected(mw::com::impl::ComErrc::kInvalidConfiguration);
     }
-    auto instance_specifier = score::mw::com::InstanceSpecifier::Create(
-                                  service_instance_config->instance_specifier()->str())
-                                  .value();
+    auto instance_specifier_result = score::mw::com::InstanceSpecifier::Create(
+        service_instance_config->instance_specifier()->str());
+    if (!instance_specifier_result.has_value()) {
+        std::cerr << "ERROR: Failed to resolve local instance specifier '"
+                  << service_instance_config->instance_specifier()->string_view()
+                  << "'. The deployed mw_com_config.json likely does not contain this entry."
+                  << std::endl;
+        return MakeUnexpected(mw::com::impl::ComErrc::kInvalidConfiguration);
+    }
+    auto instance_specifier = std::move(instance_specifier_result).value();
+
+#if defined(ENABLE_KUKSA_BROKER_FEEDER)
+    if (service_instance_config->instance_specifier()->string_view() ==
+        "gatewayd/application_rbc_position_lamp_cmd") {
+        std::cout << "[gatewayd] Enabling databroker subscriber for "
+                  << service_instance_config->instance_specifier()->string_view() << std::endl;
+        startParkingSubscriberOnce(someip_message_skeleton);
+    } else if (service_instance_config->instance_specifier()->string_view() ==
+               "gatewayd/application_rbc_hazard_lamp_cmd") {
+        std::cout << "[gatewayd] Enabling databroker subscriber for "
+                  << service_instance_config->instance_specifier()->string_view() << std::endl;
+        startHazardSubscriberOnce(someip_message_skeleton);
+    } else if (service_instance_config->instance_specifier()->string_view() ==
+               "gatewayd/application_rbc_approach_lamp_cmd") {
+        std::cout << "[gatewayd] Enabling databroker subscriber for "
+                  << service_instance_config->instance_specifier()->string_view() << std::endl;
+        startApproachSubscriberOnce(someip_message_skeleton);
+    }
+#endif
 
     std::cout << "Starting discovery: "
               << service_instance_config->instance_specifier()->string_view() << "\n";

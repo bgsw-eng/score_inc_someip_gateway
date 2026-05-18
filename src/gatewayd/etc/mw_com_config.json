@@ -135,6 +135,25 @@
       ]
     },
     {
+      "serviceTypeName": "/rbc/CarLockUnlockCommand",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7507,
+          "events": [
+            {
+              "eventName": "rbc_car_lock_unlock_cmd",
+              "eventId": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
       "serviceTypeName": "/rbc/HazardLampStatus",
       "version": {
         "major": 1,
@@ -185,6 +204,63 @@
           "events": [
             {
               "eventName": "mu2_reserved01",
+              "eventId": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "serviceTypeName": "/rbc/HazardLampCommand",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7504,
+          "events": [
+            {
+              "eventName": "rbc_hazard_lamp_on_off_cmd",
+              "eventId": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "serviceTypeName": "/rbc/ApproachLampCommand",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7505,
+          "events": [
+            {
+              "eventName": "rbc_approach_lamp_on_off_cmd",
+              "eventId": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "serviceTypeName": "/rbc/PositionLampCommand",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7506,
+          "events": [
+            {
+              "eventName": "rbc_position_lamp_on_off_cmd",
               "eventId": 0
             }
           ]
@@ -433,6 +509,94 @@
               "eventName": "mu2_reserved01",
               "numberOfSampleSlots": 10,
               "maxSubscribers": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "instanceSpecifier": "gatewayd/application_rbc_lock_unlock_cmd",
+      "serviceTypeName": "/rbc/CarLockUnlockCommand",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 2100,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "rbc_car_lock_unlock_cmd",
+              "numberOfSampleSlots": 10,
+              "maxSubscribers": 16
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "instanceSpecifier": "gatewayd/application_rbc_hazard_lamp_cmd",
+      "serviceTypeName": "/rbc/HazardLampCommand",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 2101,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "rbc_hazard_lamp_on_off_cmd",
+              "numberOfSampleSlots": 10,
+              "maxSubscribers": 16
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "instanceSpecifier": "gatewayd/application_rbc_approach_lamp_cmd",
+      "serviceTypeName": "/rbc/ApproachLampCommand",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 2102,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "rbc_approach_lamp_on_off_cmd",
+              "numberOfSampleSlots": 10,
+              "maxSubscribers": 16
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "instanceSpecifier": "gatewayd/application_rbc_position_lamp_cmd",
+      "serviceTypeName": "/rbc/PositionLampCommand",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 2103,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "rbc_position_lamp_on_off_cmd",
+              "numberOfSampleSlots": 10,
+              "maxSubscribers": 16
             }
           ]
         }

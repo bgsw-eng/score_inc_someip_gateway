@@ -11,12 +11,14 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+#include <array>
 #include <atomic>
 #include <csignal>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 #include <vsomeip/defines.hpp>
@@ -64,6 +66,8 @@ static std::atomic<bool> shutdown_requested{false};
 // Guards to prevent spawning multiple subscribe threads when ON_AVAILABLE fires repeatedly
 static std::atomic<bool> rbc3003_subscribed{false};
 static std::atomic<bool> rbc3004_subscribed{false};
+static std::atomic<bool> rbc4003_subscribed{false};
+static std::atomic<bool> rbc4004_subscribed{false};
 
 // Mutex to protect multiple client access (if needed)
 static std::mutex client_mutex;
@@ -91,7 +95,7 @@ int main(int argc, const char* argv[]) {
     std::thread([application]() {
         /*     auto handles =
                  SomeipMessageTransferProxy::FindService(
-                     score::mw::com::InstanceSpecifier::Create(std::string("someipd/gatewayd_messages"))
+                     score::mw::com::InstanceSpecifier::Create(std::string("gatewayd/gatewayd_messages"))
                          .value())
                      .value();
 
@@ -166,6 +170,20 @@ int main(int argc, const char* argv[]) {
             std::set<vsomeip::eventgroup_t> eg9{0x0009};
             application->request_event(0x3004, RBC_INSTANCE_ID, 0x8009, eg9,
                                        vsomeip::event_type_e::ET_EVENT);
+
+            // Request events for command services FROM gatewayd.
+            // Use the same eventgroup that we later subscribe/offer so vsomeip
+            // does not create placeholder subscriptions for an unknown eventgroup.
+            std::set<vsomeip::eventgroup_t> eg1{0x0001};
+            application->request_event(0x4003, RBC_INSTANCE_ID, 0x8001, eg1,
+                                       vsomeip::event_type_e::ET_EVENT);
+            application->request_event(0x4004, RBC_INSTANCE_ID, 0x8001, eg1,
+                                       vsomeip::event_type_e::ET_EVENT);
+            application->request_event(0x4004, RBC_INSTANCE_ID, 0x8002, eg1,
+                                       vsomeip::event_type_e::ET_EVENT);
+            std::set<vsomeip::eventgroup_t> eg2_cmd{0x0002};
+            application->request_event(0x4003, RBC_INSTANCE_ID, 0x8002, eg2_cmd,
+                                       vsomeip::event_type_e::ET_EVENT);
         }
 
         // -------------------------------
@@ -209,8 +227,102 @@ int main(int argc, const char* argv[]) {
             skeleton_offered = true;
         }
 
+        // Bridge gatewayd -> someipd via IPC SHM channel.
+        // This is the write path source for hardcoded gatewayd command injection.
+        std::thread([application]() {
+            auto proxy_spec_result = score::mw::com::InstanceSpecifier::Create(
+                std::string("gatewayd/gatewayd_messages"));
+            if (!proxy_spec_result.has_value()) {
+                std::cerr << ">>> [IPC] Failed to resolve instance specifier: "
+                          << "gatewayd/gatewayd_messages" << std::endl;
+                return;
+            }
+
+            // Retry until gatewayd registers its SHM service (handles race when someipd starts
+            // first).
+            std::optional<SomeipMessageTransferProxy> proxy_opt;
+            while (!shutdown_requested.load()) {
+                auto proxy_handles_result =
+                    SomeipMessageTransferProxy::FindService(proxy_spec_result.value());
+                if (proxy_handles_result.has_value() && !proxy_handles_result.value().empty()) {
+                    auto proxy_result =
+                        SomeipMessageTransferProxy::Create(proxy_handles_result.value().front());
+                    if (proxy_result.has_value()) {
+                        proxy_opt = std::move(proxy_result).value();
+                        break;
+                    }
+                }
+                std::cout << ">>> [IPC] gatewayd/gatewayd_messages not yet available, retrying..."
+                          << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            }
+            if (!proxy_opt.has_value()) {
+                std::cerr << ">>> [IPC] Shutdown before gatewayd service found" << std::endl;
+                return;
+            }
+
+            auto& proxy = proxy_opt.value();
+            std::cout << ">>> [IPC] Connected to gatewayd/gatewayd_messages SHM service"
+                      << std::endl;
+            proxy.message_.SetReceiveHandler([&proxy, application]() {
+                proxy.message_.GetNewSamples(
+                    [application](auto message_sample) {
+                        score::cpp::span<const std::byte> message(message_sample->data,
+                                                                  message_sample->size);
+                        if (message.size() < VSOMEIP_FULL_HEADER_SIZE + 1) {
+                            std::cout
+                                << ">>> [IPC] Received short gatewayd frame: " << message.size()
+                                << " byte(s)" << std::endl;
+                            return;
+                        }
+
+                        const auto b0 = static_cast<uint8_t>(message[0]);
+                        const auto b1 = static_cast<uint8_t>(message[1]);
+                        const auto b2 = static_cast<uint8_t>(message[2]);
+                        const auto b3 = static_cast<uint8_t>(message[3]);
+                        const uint16_t svc_id = (static_cast<uint16_t>(b0) << 8) | b1;
+                        const uint16_t evt_id = (static_cast<uint16_t>(b2) << 8) | b3;
+                        const auto payload = message.subspan(VSOMEIP_FULL_HEADER_SIZE);
+                        const int v = static_cast<uint8_t>(payload[0]);
+
+                        std::cout << ">>> [IPC->SOMEIP] FRAME RECEIVED [svc=0x" << std::hex
+                                  << svc_id << " evt=0x" << evt_id << std::dec << "] value=" << v
+                                  << std::endl;
+
+                        // Publish command events on SOME/IP so handlers and subscribers can
+                        // observe.
+                        if (svc_id == 0x4004 && (evt_id == 0x8001 || evt_id == 0x8002)) {
+                            std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
+                                      << " [svc=0x4004 evt=0x" << std::hex << evt_id << std::dec
+                                      << "]" << std::endl;
+                            auto payload_obj = vsomeip::runtime::get()->create_payload();
+                            std::array<vsomeip::byte_t, 1> out{
+                                static_cast<vsomeip::byte_t>(payload[0])};
+                            payload_obj->set_data(out.data(), out.size());
+                            application->notify(0x4004, RBC_INSTANCE_ID, evt_id, payload_obj);
+                        } else if (svc_id == 0x4003 && (evt_id == 0x8001 || evt_id == 0x8002)) {
+                            std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
+                                      << " [svc=0x4003 evt=0x" << std::hex << evt_id << std::dec
+                                      << "]" << std::endl;
+                            auto payload_obj = vsomeip::runtime::get()->create_payload();
+                            std::array<vsomeip::byte_t, 1> out{
+                                static_cast<vsomeip::byte_t>(payload[0])};
+                            payload_obj->set_data(out.data(), out.size());
+                            application->notify(0x4003, RBC_INSTANCE_ID, evt_id, payload_obj);
+                        }
+                    },
+                    max_sample_count);
+            });
+            proxy.message_.Subscribe(max_sample_count);
+            std::cout << ">>> [IPC] Subscribed to gatewayd SHM message channel" << std::endl;
+
+            while (!shutdown_requested.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            }
+        }).detach();
+
         // -------------------------------
-        // Step 1 — Register ALL message handlers BEFORE availability handlers.
+        // Register ALL message handlers BEFORE availability handlers.
         // This ensures no event can arrive in the window between on_available firing
         // and the for loop registering later handlers (would be silently dropped).
         // -------------------------------
@@ -236,15 +348,12 @@ int main(int argc, const char* argv[]) {
                         rbc_last_value[sig_idx] = v;
                     }
 
-                    std::cout << ">>> RBC " << sig.label << " CHANGED <<<"
-                              << " [service=0x" << std::hex << sig.service_id << " event=0x"
-                              << sig.event_id << std::dec << "]" << std::endl;
-                    std::cout << "Raw payload (" << len << " byte(s)): ";
-                    for (vsomeip::length_t i = 0; i < len; i++)
-                        std::cout << std::hex << std::setw(2) << std::setfill('0')
-                                  << static_cast<int>(data[i]) << " ";
-                    std::cout << std::dec << std::endl;
-                    std::cout << "Value: " << v << " -> " << (v == 0 ? sig.off_label : sig.on_label)
+                    std::cout << ">>> [CANoe->gatewayd] CHANGED [service=0x" << std::hex
+                              << sig.service_id << " event=0x" << sig.event_id << std::dec
+                              << "] value=" << v << " (" << (v == 0 ? sig.off_label : sig.on_label)
+                              << ")" << std::endl;
+
+                    std::cout << ">>> [CANoe->gatewayd] FORWARDING to gatewayd IPC skeleton"
                               << std::endl;
 
                     // Forward to mw::com skeleton with full 16-byte SOME/IP header
@@ -294,6 +403,64 @@ int main(int argc, const char* argv[]) {
                 });
         }
 
+        // Message handlers for 0x4004 commands FROM gatewayd
+        application->register_message_handler(
+            0x4003, RBC_INSTANCE_ID, 0x8001, [](const std::shared_ptr<vsomeip::message>& msg) {
+                auto data = msg->get_payload()->get_data();
+                auto len = msg->get_payload()->get_length();
+                if (len < 1) {
+                    std::cout << ">>> LOCK CMD: Payload too short" << std::endl;
+                    return;
+                }
+                const int v = static_cast<uint8_t>(data[0]);
+                std::cout << ">>> SIGNAL RECEIVED [svc=0x4003 evt=0x8001]" << std::endl;
+                std::cout << ">>> [CMD FROM GATEWAYD] CAR LOCK/UNLOCK: "
+                          << (v == 0 ? "UNLOCK" : "LOCK") << " (0x" << std::hex << v << std::dec
+                          << ")" << std::endl;
+            });
+
+        application->register_message_handler(
+            0x4004, RBC_INSTANCE_ID, 0x8001, [](const std::shared_ptr<vsomeip::message>& msg) {
+                auto data = msg->get_payload()->get_data();
+                auto len = msg->get_payload()->get_length();
+                if (len < 1) {
+                    std::cout << ">>> HAZARD LAMP CMD: Payload too short" << std::endl;
+                    return;
+                }
+                const int v = static_cast<uint8_t>(data[0]);
+                std::cout << ">>> SIGNAL RECEIVED [svc=0x4004 evt=0x8001]" << std::endl;
+                std::cout << ">>> [CMD FROM GATEWAYD] HAZARD LAMP: " << (v == 0 ? "OFF" : "ON")
+                          << " (0x" << std::hex << v << std::dec << ")" << std::endl;
+            });
+
+        application->register_message_handler(
+            0x4004, RBC_INSTANCE_ID, 0x8002, [](const std::shared_ptr<vsomeip::message>& msg) {
+                auto data = msg->get_payload()->get_data();
+                auto len = msg->get_payload()->get_length();
+                if (len < 1) {
+                    std::cout << ">>> APPROACH LAMP CMD: Payload too short" << std::endl;
+                    return;
+                }
+                const int v = static_cast<uint8_t>(data[0]);
+                std::cout << ">>> SIGNAL RECEIVED [svc=0x4004 evt=0x8002]" << std::endl;
+                std::cout << ">>> [CMD FROM GATEWAYD] APPROACH LAMP: " << (v == 0 ? "OFF" : "ON")
+                          << " (0x" << std::hex << v << std::dec << ")" << std::endl;
+            });
+
+        application->register_message_handler(
+            0x4003, RBC_INSTANCE_ID, 0x8002, [](const std::shared_ptr<vsomeip::message>& msg) {
+                auto data = msg->get_payload()->get_data();
+                auto len = msg->get_payload()->get_length();
+                if (len < 1) {
+                    std::cout << ">>> POSITION LAMP CMD: Payload too short" << std::endl;
+                    return;
+                }
+                const int v = static_cast<uint8_t>(data[0]);
+                std::cout << ">>> SIGNAL RECEIVED [svc=0x4003 evt=0x8002]" << std::endl;
+                std::cout << ">>> [CMD FROM GATEWAYD] POSITION LAMP: " << (v == 0 ? "OFF" : "ON")
+                          << " (0x" << std::hex << v << std::dec << ")" << std::endl;
+            });
+
         // -------------------------------
         // Step 2 — Register availability handlers. subscribe() is posted via a
         // detached thread so it does not re-enter the vsomeip dispatch thread.
@@ -337,12 +504,181 @@ int main(int argc, const char* argv[]) {
                 }
             });
 
+        application->register_availability_handler(
+            0x4003, RBC_INSTANCE_ID,
+            [application](vsomeip::service_t svc, vsomeip::instance_t inst, bool available) {
+                if (available) {
+                    std::cout << ">>> RBC 0x4003 available — subscribing command (0x8002)"
+                              << std::endl;
+                    if (rbc4003_subscribed.exchange(true)) {
+                        return;
+                    }
+                    std::thread([application, svc, inst]() {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        application->subscribe(svc, inst, 0x0001);
+                        application->subscribe(svc, inst, 0x0002);  // subscribe to eventgroup
+                    }).detach();
+                } else {
+                    std::cout << ">>> RBC 0x4003 unavailable" << std::endl;
+                    rbc4003_subscribed.store(false);
+                }
+            });
+
+        // Availability handler for 0x4004 commands FROM gatewayd
+        application->register_availability_handler(
+            0x4004, RBC_INSTANCE_ID,
+            [application](vsomeip::service_t svc, vsomeip::instance_t inst, bool available) {
+                if (available) {
+                    std::cout << ">>> RBC 0x4004 available — subscribing command (0x8001)"
+                              << std::endl;
+                    if (rbc4004_subscribed.exchange(true)) {
+                        return;
+                    }
+                    std::thread([application, svc, inst]() {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        application->subscribe(svc, inst, 0x0001);  // subscribe to eventgroup
+                    }).detach();
+                } else {
+                    std::cout << ">>> RBC 0x4004 unavailable" << std::endl;
+                    rbc4004_subscribed.store(false);
+                }
+            });
+
         // -------------------------------
         // Step 3 — request_service: triggers SD + availability callback → subscribe.
         // Called once per unique service (not per signal) to avoid ref-count imbalance.
         // -------------------------------
         application->request_service(0x3003, RBC_INSTANCE_ID, 0x01);
         application->request_service(0x3004, RBC_INSTANCE_ID, 0x01);
+        application->request_service(0x4003, RBC_INSTANCE_ID, 0x01);  // Request 0x4003 service
+        application->request_service(0x4004, RBC_INSTANCE_ID, 0x01);  // Request 0x4004 service
+
+        // Subscribe to gatewayd's lamp command IPC events (optional).
+        // Some integration setups ship only someipd instance mappings, so do not abort when
+        // gatewayd command instance specifiers are missing in mw_com_config.
+        auto instance_spec_lock_result = score::mw::com::InstanceSpecifier::Create(
+            std::string("gatewayd/application_rbc_lock_unlock_cmd"));
+        if (instance_spec_lock_result.has_value()) {
+            auto instance_spec_lock = std::move(instance_spec_lock_result).value();
+            std::thread([instance_spec_lock]() {
+                auto result = score::mw::com::GenericProxy::FindService(instance_spec_lock);
+                if (result.has_value()) {
+                    auto handles = result.value();
+                    if (!handles.empty()) {
+                        auto proxy_result = score::mw::com::GenericProxy::Create(handles.front());
+                        if (proxy_result.has_value()) {
+                            auto proxy = std::move(proxy_result).value();
+                            auto& events = proxy.GetEvents();
+                            auto evt = events.find("rbc_car_lock_unlock_cmd");
+                            if (evt != events.cend()) {
+                                evt->second.SetReceiveHandler([]() { /* event received */ });
+                                evt->second.Subscribe(10);
+                                std::cout << ">>> [IPC] Subscribed to car lock/unlock command from "
+                                             "gatewayd"
+                                          << std::endl;
+                            }
+                        }
+                    }
+                }
+            }).detach();
+        } else {
+            std::cout << ">>> [IPC] Optional instance mapping missing: "
+                      << "gatewayd/application_rbc_lock_unlock_cmd (skipping IPC subscribe)"
+                      << std::endl;
+        }
+
+        auto instance_spec_hazard_result = score::mw::com::InstanceSpecifier::Create(
+            std::string("gatewayd/application_rbc_hazard_lamp_cmd"));
+        if (instance_spec_hazard_result.has_value()) {
+            auto instance_spec_hazard = std::move(instance_spec_hazard_result).value();
+            std::thread([instance_spec_hazard]() {
+                auto result = score::mw::com::GenericProxy::FindService(instance_spec_hazard);
+                if (result.has_value()) {
+                    auto handles = result.value();
+                    if (!handles.empty()) {
+                        auto proxy_result = score::mw::com::GenericProxy::Create(handles.front());
+                        if (proxy_result.has_value()) {
+                            auto proxy = std::move(proxy_result).value();
+                            auto& events = proxy.GetEvents();
+                            auto evt = events.find("rbc_hazard_lamp_on_off_cmd");
+                            if (evt != events.cend()) {
+                                evt->second.SetReceiveHandler([]() { /* event received */ });
+                                evt->second.Subscribe(10);
+                                std::cout
+                                    << ">>> [IPC] Subscribed to hazard lamp command from gatewayd"
+                                    << std::endl;
+                            }
+                        }
+                    }
+                }
+            }).detach();
+        } else {
+            std::cout << ">>> [IPC] Optional instance mapping missing: "
+                      << "gatewayd/application_rbc_hazard_lamp_cmd (skipping IPC subscribe)"
+                      << std::endl;
+        }
+
+        auto instance_spec_approach_result = score::mw::com::InstanceSpecifier::Create(
+            std::string("gatewayd/application_rbc_approach_lamp_cmd"));
+        if (instance_spec_approach_result.has_value()) {
+            auto instance_spec_approach = std::move(instance_spec_approach_result).value();
+            std::thread([instance_spec_approach]() {
+                auto result = score::mw::com::GenericProxy::FindService(instance_spec_approach);
+                if (result.has_value()) {
+                    auto handles = result.value();
+                    if (!handles.empty()) {
+                        auto proxy_result = score::mw::com::GenericProxy::Create(handles.front());
+                        if (proxy_result.has_value()) {
+                            auto proxy = std::move(proxy_result).value();
+                            auto& events = proxy.GetEvents();
+                            auto evt = events.find("rbc_approach_lamp_on_off_cmd");
+                            if (evt != events.cend()) {
+                                evt->second.SetReceiveHandler([]() { /* event received */ });
+                                evt->second.Subscribe(10);
+                                std::cout
+                                    << ">>> [IPC] Subscribed to approach lamp command from gatewayd"
+                                    << std::endl;
+                            }
+                        }
+                    }
+                }
+            }).detach();
+        } else {
+            std::cout << ">>> [IPC] Optional instance mapping missing: "
+                      << "gatewayd/application_rbc_approach_lamp_cmd (skipping IPC subscribe)"
+                      << std::endl;
+        }
+
+        auto instance_spec_position_result = score::mw::com::InstanceSpecifier::Create(
+            std::string("gatewayd/application_rbc_position_lamp_cmd"));
+        if (instance_spec_position_result.has_value()) {
+            auto instance_spec_position = std::move(instance_spec_position_result).value();
+            std::thread([instance_spec_position]() {
+                auto result = score::mw::com::GenericProxy::FindService(instance_spec_position);
+                if (result.has_value()) {
+                    auto handles = result.value();
+                    if (!handles.empty()) {
+                        auto proxy_result = score::mw::com::GenericProxy::Create(handles.front());
+                        if (proxy_result.has_value()) {
+                            auto proxy = std::move(proxy_result).value();
+                            auto& events = proxy.GetEvents();
+                            auto evt = events.find("rbc_position_lamp_on_off_cmd");
+                            if (evt != events.cend()) {
+                                evt->second.SetReceiveHandler([]() { /* event received */ });
+                                evt->second.Subscribe(10);
+                                std::cout
+                                    << ">>> [IPC] Subscribed to position lamp command from gatewayd"
+                                    << std::endl;
+                            }
+                        }
+                    }
+                }
+            }).detach();
+        } else {
+            std::cout << ">>> [IPC] Optional instance mapping missing: "
+                      << "gatewayd/application_rbc_position_lamp_cmd (skipping IPC subscribe)"
+                      << std::endl;
+        }
 
         // -------------------------------
         // Service Discovery (SD) active
@@ -351,6 +687,23 @@ int main(int argc, const char* argv[]) {
 
         // Offer own service → SD advertises this service to network
         application->offer_service(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID);
+
+        // OFFER 0x4004 service to receive commands FROM gatewayd
+        application->offer_service(0x4003, RBC_INSTANCE_ID);
+        std::set<vsomeip::eventgroup_t> lock_cmd_groups{0x0001};
+        application->offer_event(0x4003, RBC_INSTANCE_ID, 0x8001, lock_cmd_groups,
+                                 vsomeip::event_type_e::ET_EVENT);
+        std::set<vsomeip::eventgroup_t> pos_cmd_groups{0x0002};
+        application->offer_event(0x4003, RBC_INSTANCE_ID, 0x8002, pos_cmd_groups,
+                                 vsomeip::event_type_e::ET_EVENT);
+
+        // OFFER 0x4004 service to receive commands FROM gatewayd
+        application->offer_service(0x4004, RBC_INSTANCE_ID);
+        std::set<vsomeip::eventgroup_t> cmd_groups{0x0001};
+        application->offer_event(0x4004, RBC_INSTANCE_ID, 0x8001, cmd_groups,
+                                 vsomeip::event_type_e::ET_EVENT);
+        application->offer_event(0x4004, RBC_INSTANCE_ID, 0x8002, cmd_groups,
+                                 vsomeip::event_type_e::ET_EVENT);
 
         // Offer an event → makes it discoverable
         application->offer_event(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID, groups);

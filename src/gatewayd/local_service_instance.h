@@ -14,12 +14,19 @@
 #ifndef SRC_GATEWAYD_LOCAL_SERVICE_INSTANCE
 #define SRC_GATEWAYD_LOCAL_SERVICE_INSTANCE
 
+#include <atomic>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 #include "score/mw/com/types.h"
 #include "src/gatewayd/gatewayd_config_generated.h"
 #include "src/network_service/interfaces/message_transfer.h"
+#if defined(ENABLE_KUKSA_BROKER_FEEDER)
+#include "collector_client.h"
+#include "data_broker_feeder.h"
+#endif
 
 namespace score::someip_gateway::gatewayd {
 
@@ -48,6 +55,14 @@ class LocalServiceInstance {
     score::mw::com::GenericProxy ipc_proxy_;
     network_service::interfaces::message_transfer::SomeipMessageTransferSkeleton&
         someip_message_skeleton_;
+
+#if defined(ENABLE_KUKSA_BROKER_FEEDER)
+    std::shared_ptr<std::thread> broker_subscriber_thread_;
+    std::atomic<bool> subscriber_active_{false};
+
+    void startBrokerSubscriber();
+    void subscribeToParkingLightSignal();
+#endif
 };
 }  // namespace score::someip_gateway::gatewayd
 

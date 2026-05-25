@@ -43,7 +43,7 @@ CollectorClient::CollectorClient(std::string broker_addr, std::string auth_token
     kuksa_stub_ = kuksa::val::v1::VAL::NewStub(channel_);
 }
 
-bool CollectorClient::WaitForConnected(std::chrono::_V2::system_clock::time_point deadline) {
+bool CollectorClient::WaitForConnected(std::chrono::system_clock::time_point deadline) {
     connected_ = channel_->WaitForConnected(deadline);
     return connected_;
 }

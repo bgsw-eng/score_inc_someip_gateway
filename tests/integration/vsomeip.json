@@ -1,73 +1,9 @@
 {
     "unicast": "169.254.129.102",
-    "logging": {
-        "level": "debug",
-        "console": "false",
-        "file": {
-            "enable": "true",
-            "path": "/tmp/vsomeip_someipd.log"
-        },
-        "dlt": "false"
-    },
     "applications": [
         {
             "name": "someipd",
             "id": "0x0100"
-        }
-    ],
-    "services": [
-        {
-            "service": "0x4004",
-            "instance": "0x0001",
-            "unreliable": "31000",
-            "events": [
-                {
-                    "event": "0x8001",
-                    "is_field": "false"
-                },
-                {
-                    "event": "0x8002",
-                    "is_field": "false"
-                }
-            ],
-            "eventgroups": [
-                {
-                    "eventgroup": "0x0001",
-                    "events": [
-                        "0x8001",
-                        "0x8002"
-                    ]
-                }
-            ]
-        },
-        {
-            "service": "0x4003",
-            "instance": "0x0001",
-            "unreliable": "31000",
-            "events": [
-                {
-                    "event": "0x8001",
-                    "is_field": "false"
-                },
-                {
-                    "event": "0x8002",
-                    "is_field": "false"
-                }
-            ],
-            "eventgroups": [
-                {
-                    "eventgroup": "0x0001",
-                    "events": [
-                        "0x8001"
-                    ]
-                },
-                {
-                    "eventgroup": "0x0002",
-                    "events": [
-                        "0x8002"
-                    ]
-                }
-            ]
         }
     ],
     "clients": [
@@ -77,8 +13,8 @@
                 "last": "4000"
             },
             "unreliable_client_ports": {
-                "first": "4001",
-                "last": "4001"
+                "first": "4000",
+                "last": "31000"
             }
         }
     ],
@@ -87,13 +23,13 @@
         "multicast": "224.0.0.10",
         "port": "30490",
         "protocol": "udp",
-        "initial_delay_min": "10",
-        "initial_delay_max": "100",
-        "repetitions_base_delay": "200",
-        "repetitions_max": "3",
+        "initial_delay_min": "0",
+        "initial_delay_max": "0",
+        "repetitions_base_delay": "100",
+        "repetitions_max": "5",
         "ttl": "4",
         "cyclic_offer_delay": "3000",
         "cyclic_request_delay": "30000",
-        "request_response_delay": "1500"
+        "request_response_delay": "0"
     }
 }

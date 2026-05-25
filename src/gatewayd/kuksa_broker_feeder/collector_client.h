@@ -36,7 +36,7 @@ class CollectorClient {
 
     virtual ~CollectorClient() = default;
 
-    bool WaitForConnected(std::chrono::_V2::system_clock::time_point deadline);
+    bool WaitForConnected(std::chrono::system_clock::time_point deadline);
 
     grpc_connectivity_state GetState();
 

@@ -56,6 +56,12 @@ static const vsomeip::instance_t RBC_INSTANCE_ID = 0x0001;
 #define OTHER_SAMPLE_INSTANCE_ID 0x5422
 #define OTHER_SAMPLE_METHOD_ID 0x1421
 
+static constexpr vsomeip::major_version_t SOMEIP_MAJOR = 0x01;
+static constexpr vsomeip::minor_version_t SOMEIP_MINOR = 0x00;
+static constexpr uint16_t WRITE_SERVICE_PORT = 4000;
+static constexpr bool WRITE_SERVICE_IS_RELIABLE = false;
+static constexpr bool WRITE_SERVICE_USE_MAGIC_COOKIE = false;
+
 using score::someip_gateway::network_service::interfaces::message_transfer::
     SomeipMessageTransferProxy;
 using score::someip_gateway::network_service::interfaces::message_transfer::
@@ -175,15 +181,13 @@ int main(int argc, const char* argv[]) {
             // Use the same eventgroup that we later subscribe/offer so vsomeip
             // does not create placeholder subscriptions for an unknown eventgroup.
             std::set<vsomeip::eventgroup_t> eg1{0x0001};
-            application->request_event(0x4003, RBC_INSTANCE_ID, 0x8001, eg1,
-                                       vsomeip::event_type_e::ET_EVENT);
-            application->request_event(0x4004, RBC_INSTANCE_ID, 0x8001, eg1,
-                                       vsomeip::event_type_e::ET_EVENT);
-            application->request_event(0x4004, RBC_INSTANCE_ID, 0x8002, eg1,
-                                       vsomeip::event_type_e::ET_EVENT);
-            std::set<vsomeip::eventgroup_t> eg2_cmd{0x0002};
-            application->request_event(0x4003, RBC_INSTANCE_ID, 0x8002, eg2_cmd,
-                                       vsomeip::event_type_e::ET_EVENT);
+            // application->request_event(0x4003, RBC_INSTANCE_ID, 0x8001, eg1,
+            //                            vsomeip::event_type_e::ET_EVENT);
+            // application->request_event(0x4004, RBC_INSTANCE_ID, 0x8001, eg1,
+            //                           vsomeip::event_type_e::ET_EVENT);
+            // std::set<vsomeip::eventgroup_t> eg2_cmd{0x0002};
+            // application->request_event(0x4003, RBC_INSTANCE_ID, 0x8002, eg2_cmd,
+            //                            vsomeip::event_type_e::ET_EVENT);
         }
 
         // -------------------------------
@@ -264,6 +268,61 @@ int main(int argc, const char* argv[]) {
             auto& proxy = proxy_opt.value();
             std::cout << ">>> [IPC] Connected to gatewayd/gatewayd_messages SHM service"
                       << std::endl;
+
+            // Offer write services only after IPC is ready so CANoe discovery aligns
+            // with an operational gatewayd -> someipd forwarding path.
+            static bool services_offered = false;
+            if (!services_offered) {
+                std::cout << ">>> [OFFER] Offering write services (0x4003/0x4004/0x4007)"
+                          << std::endl;
+
+                application->offer_service(0x4003, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
+                std::set<vsomeip::eventgroup_t> lock_cmd_groups{0x0001};
+
+                application->update_service_configuration(
+                    0x4003, RBC_INSTANCE_ID, WRITE_SERVICE_PORT, WRITE_SERVICE_IS_RELIABLE,
+                    WRITE_SERVICE_USE_MAGIC_COOKIE, true);
+
+                application->offer_event(0x4003, RBC_INSTANCE_ID, 0x8001, lock_cmd_groups,
+                                         vsomeip::event_type_e::ET_EVENT,
+                                         std::chrono::milliseconds::zero(), false, true, nullptr,
+                                         vsomeip::reliability_type_e::RT_UNRELIABLE);
+                std::set<vsomeip::eventgroup_t> pos_cmd_groups{0x0002};
+                application->offer_event(0x4003, RBC_INSTANCE_ID, 0x8002, pos_cmd_groups,
+                                         vsomeip::event_type_e::ET_EVENT,
+                                         std::chrono::milliseconds::zero(), false, true, nullptr,
+                                         vsomeip::reliability_type_e::RT_UNRELIABLE);
+
+                application->offer_service(0x4004, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
+                application->update_service_configuration(
+                    0x4004, RBC_INSTANCE_ID, WRITE_SERVICE_PORT, WRITE_SERVICE_IS_RELIABLE,
+                    WRITE_SERVICE_USE_MAGIC_COOKIE, true);
+                std::set<vsomeip::eventgroup_t> cmd_groups{0x0001};
+                application->offer_event(0x4004, RBC_INSTANCE_ID, 0x8001, cmd_groups,
+                                         vsomeip::event_type_e::ET_EVENT,
+                                         std::chrono::milliseconds::zero(), false, true, nullptr,
+                                         vsomeip::reliability_type_e::RT_UNRELIABLE);
+
+                application->offer_service(0x4007, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
+
+                application->update_service_configuration(
+                    0x4007, RBC_INSTANCE_ID, WRITE_SERVICE_PORT, WRITE_SERVICE_IS_RELIABLE,
+                    WRITE_SERVICE_USE_MAGIC_COOKIE, true);
+
+                application->offer_event(0x4007, RBC_INSTANCE_ID, 0x8001, cmd_groups,
+                                         vsomeip::event_type_e::ET_EVENT,
+                                         std::chrono::milliseconds::zero(), false, true, nullptr,
+                                         vsomeip::reliability_type_e::RT_UNRELIABLE);
+
+                // application->stop_offer_service(0x4003, RBC_INSTANCE_ID, SOMEIP_MAJOR,
+                //                                 SOMEIP_MINOR);
+                // application->offer_service(0x4003, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
+                // application->stop_offer_service(0x4004, RBC_INSTANCE_ID, SOMEIP_MAJOR,
+                //                                 SOMEIP_MINOR);
+                // application->offer_service(0x4004, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
+                services_offered = true;
+            }
+
             proxy.message_.SetReceiveHandler([&proxy, application]() {
                 proxy.message_.GetNewSamples(
                     [application](auto message_sample) {
@@ -291,7 +350,7 @@ int main(int argc, const char* argv[]) {
 
                         // Publish command events on SOME/IP so handlers and subscribers can
                         // observe.
-                        if (svc_id == 0x4004 && (evt_id == 0x8001 || evt_id == 0x8002)) {
+                        if (svc_id == 0x4004 && evt_id == 0x8001) {
                             std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
                                       << " [svc=0x4004 evt=0x" << std::hex << evt_id << std::dec
                                       << "]" << std::endl;
@@ -300,6 +359,15 @@ int main(int argc, const char* argv[]) {
                                 static_cast<vsomeip::byte_t>(payload[0])};
                             payload_obj->set_data(out.data(), out.size());
                             application->notify(0x4004, RBC_INSTANCE_ID, evt_id, payload_obj);
+                        } else if (svc_id == 0x4007 && evt_id == 0x8001) {
+                            std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
+                                      << " [svc=0x4007 evt=0x" << std::hex << evt_id << std::dec
+                                      << "]" << std::endl;
+                            auto payload_obj = vsomeip::runtime::get()->create_payload();
+                            std::array<vsomeip::byte_t, 1> out{
+                                static_cast<vsomeip::byte_t>(payload[0])};
+                            payload_obj->set_data(out.data(), out.size());
+                            application->notify(0x4007, RBC_INSTANCE_ID, evt_id, payload_obj);
                         } else if (svc_id == 0x4003 && (evt_id == 0x8001 || evt_id == 0x8002)) {
                             std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
                                       << " [svc=0x4003 evt=0x" << std::hex << evt_id << std::dec
@@ -418,49 +486,6 @@ int main(int argc, const char* argv[]) {
                           << (v == 0 ? "UNLOCK" : "LOCK") << " (0x" << std::hex << v << std::dec
                           << ")" << std::endl;
             });
-
-        application->register_message_handler(
-            0x4004, RBC_INSTANCE_ID, 0x8001, [](const std::shared_ptr<vsomeip::message>& msg) {
-                auto data = msg->get_payload()->get_data();
-                auto len = msg->get_payload()->get_length();
-                if (len < 1) {
-                    std::cout << ">>> HAZARD LAMP CMD: Payload too short" << std::endl;
-                    return;
-                }
-                const int v = static_cast<uint8_t>(data[0]);
-                std::cout << ">>> SIGNAL RECEIVED [svc=0x4004 evt=0x8001]" << std::endl;
-                std::cout << ">>> [CMD FROM GATEWAYD] HAZARD LAMP: " << (v == 0 ? "OFF" : "ON")
-                          << " (0x" << std::hex << v << std::dec << ")" << std::endl;
-            });
-
-        application->register_message_handler(
-            0x4004, RBC_INSTANCE_ID, 0x8002, [](const std::shared_ptr<vsomeip::message>& msg) {
-                auto data = msg->get_payload()->get_data();
-                auto len = msg->get_payload()->get_length();
-                if (len < 1) {
-                    std::cout << ">>> APPROACH LAMP CMD: Payload too short" << std::endl;
-                    return;
-                }
-                const int v = static_cast<uint8_t>(data[0]);
-                std::cout << ">>> SIGNAL RECEIVED [svc=0x4004 evt=0x8002]" << std::endl;
-                std::cout << ">>> [CMD FROM GATEWAYD] APPROACH LAMP: " << (v == 0 ? "OFF" : "ON")
-                          << " (0x" << std::hex << v << std::dec << ")" << std::endl;
-            });
-
-        application->register_message_handler(
-            0x4003, RBC_INSTANCE_ID, 0x8002, [](const std::shared_ptr<vsomeip::message>& msg) {
-                auto data = msg->get_payload()->get_data();
-                auto len = msg->get_payload()->get_length();
-                if (len < 1) {
-                    std::cout << ">>> POSITION LAMP CMD: Payload too short" << std::endl;
-                    return;
-                }
-                const int v = static_cast<uint8_t>(data[0]);
-                std::cout << ">>> SIGNAL RECEIVED [svc=0x4003 evt=0x8002]" << std::endl;
-                std::cout << ">>> [CMD FROM GATEWAYD] POSITION LAMP: " << (v == 0 ? "OFF" : "ON")
-                          << " (0x" << std::hex << v << std::dec << ")" << std::endl;
-            });
-
         // -------------------------------
         // Step 2 — Register availability handlers. subscribe() is posted via a
         // detached thread so it does not re-enter the vsomeip dispatch thread.
@@ -476,9 +501,9 @@ int main(int argc, const char* argv[]) {
                     }
                     std::thread([application, svc, inst]() {
                         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                        application->subscribe(svc, inst, 0x0002, 0x01);
-                        application->subscribe(svc, inst, 0x0003, 0x01);
-                        application->subscribe(svc, inst, 0x0004, 0x01);
+                        application->subscribe(svc, inst, 0x0002, SOMEIP_MAJOR);
+                        application->subscribe(svc, inst, 0x0003, SOMEIP_MAJOR);
+                        application->subscribe(svc, inst, 0x0004, SOMEIP_MAJOR);
                     }).detach();
                 } else {
                     std::cout << ">>> RBC 0x3003 unavailable" << std::endl;
@@ -496,7 +521,7 @@ int main(int argc, const char* argv[]) {
                     }
                     std::thread([application, svc, inst]() {
                         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                        application->subscribe(svc, inst, 0x0009, 0x01);
+                        application->subscribe(svc, inst, 0x0009, SOMEIP_MAJOR);
                     }).detach();
                 } else {
                     std::cout << ">>> RBC 0x3004 unavailable" << std::endl;
@@ -504,54 +529,59 @@ int main(int argc, const char* argv[]) {
                 }
             });
 
-        application->register_availability_handler(
-            0x4003, RBC_INSTANCE_ID,
-            [application](vsomeip::service_t svc, vsomeip::instance_t inst, bool available) {
-                if (available) {
-                    std::cout << ">>> RBC 0x4003 available — subscribing command (0x8002)"
-                              << std::endl;
-                    if (rbc4003_subscribed.exchange(true)) {
-                        return;
-                    }
-                    std::thread([application, svc, inst]() {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                        application->subscribe(svc, inst, 0x0001);
-                        application->subscribe(svc, inst, 0x0002);  // subscribe to eventgroup
-                    }).detach();
-                } else {
-                    std::cout << ">>> RBC 0x4003 unavailable" << std::endl;
-                    rbc4003_subscribed.store(false);
-                }
-            });
+        // application->register_availability_handler(
+        //     0x4003, RBC_INSTANCE_ID,
+        //     [application](vsomeip::service_t svc, vsomeip::instance_t inst, bool available) {
+        //         if (available) {
+        //             std::cout << ">>> RBC 0x4003 available — subscribing command (0x8002)"
+        //                       << std::endl;
+        //             if (rbc4003_subscribed.exchange(true)) {
+        //                 return;
+        //             }
+        //             std::thread([application, svc, inst]() {
+        //                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        //                 application->subscribe(svc, inst, 0x0001);
+        //                 application->subscribe(svc, inst, 0x0002);  // subscribe to eventgroup
+        //             }).detach();
+        //         } else {
+        //             std::cout << ">>> RBC 0x4003 unavailable" << std::endl;
+        //             rbc4003_subscribed.store(false);
+        //         }
+        //     });
 
         // Availability handler for 0x4004 commands FROM gatewayd
-        application->register_availability_handler(
-            0x4004, RBC_INSTANCE_ID,
-            [application](vsomeip::service_t svc, vsomeip::instance_t inst, bool available) {
-                if (available) {
-                    std::cout << ">>> RBC 0x4004 available — subscribing command (0x8001)"
-                              << std::endl;
-                    if (rbc4004_subscribed.exchange(true)) {
-                        return;
-                    }
-                    std::thread([application, svc, inst]() {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                        application->subscribe(svc, inst, 0x0001);  // subscribe to eventgroup
-                    }).detach();
-                } else {
-                    std::cout << ">>> RBC 0x4004 unavailable" << std::endl;
-                    rbc4004_subscribed.store(false);
-                }
-            });
+        //  application->register_availability_handler(
+        //      0x4004, RBC_INSTANCE_ID,
+        //      [application](vsomeip::service_t svc, vsomeip::instance_t inst, bool available) {
+        //          if (available) {
+        //              std::cout << ">>> RBC 0x4004 available — subscribing command
+        //              (0x8001/0x8002)"
+        //                        << std::endl;
+        //              if (rbc4004_subscribed.exchange(true)) {
+        //                  return;
+        //              }
+        //              std::thread([application, svc, inst]() {
+        //                  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        //                  application->subscribe(svc, inst, 0x0001, SOMEIP_MAJOR, 0x0001);
+        //                  //     application->subscribe(svc, inst, 0x0002, SOMEIP_MAJOR);  //
+        //                  //     subscribe to eventgroup
+        //              }).detach();
+        //          } else {
+        //              std::cout << ">>> RBC 0x4004 unavailable" << std::endl;
+        //              rbc4004_subscribed.store(false);
+        //          }
+        //      });
 
         // -------------------------------
         // Step 3 — request_service: triggers SD + availability callback → subscribe.
         // Called once per unique service (not per signal) to avoid ref-count imbalance.
         // -------------------------------
-        application->request_service(0x3003, RBC_INSTANCE_ID, 0x01);
-        application->request_service(0x3004, RBC_INSTANCE_ID, 0x01);
-        application->request_service(0x4003, RBC_INSTANCE_ID, 0x01);  // Request 0x4003 service
-        application->request_service(0x4004, RBC_INSTANCE_ID, 0x01);  // Request 0x4004 service
+        application->request_service(0x3003, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
+        application->request_service(0x3004, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
+        // application->request_service(0x4003, RBC_INSTANCE_ID, SOMEIP_MAJOR,
+        //                              SOMEIP_MINOR);  // Request 0x4003 service
+        // application->request_service(0x4004, RBC_INSTANCE_ID, SOMEIP_MAJOR,
+        //                              SOMEIP_MINOR);  // Request 0x4004 service
 
         // Subscribe to gatewayd's lamp command IPC events (optional).
         // Some integration setups ship only someipd instance mappings, so do not abort when
@@ -686,35 +716,23 @@ int main(int argc, const char* argv[]) {
         std::set<vsomeip::eventgroup_t> groups{SAMPLE_EVENTGROUP_ID};
 
         // Offer own service → SD advertises this service to network
-        application->offer_service(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID);
+        application->offer_service(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SOMEIP_MAJOR,
+                                   SOMEIP_MINOR);
 
-        // OFFER 0x4004 service to receive commands FROM gatewayd
-        application->offer_service(0x4003, RBC_INSTANCE_ID);
-        std::set<vsomeip::eventgroup_t> lock_cmd_groups{0x0001};
-        application->offer_event(0x4003, RBC_INSTANCE_ID, 0x8001, lock_cmd_groups,
-                                 vsomeip::event_type_e::ET_EVENT);
-        std::set<vsomeip::eventgroup_t> pos_cmd_groups{0x0002};
-        application->offer_event(0x4003, RBC_INSTANCE_ID, 0x8002, pos_cmd_groups,
-                                 vsomeip::event_type_e::ET_EVENT);
-
-        // OFFER 0x4004 service to receive commands FROM gatewayd
-        application->offer_service(0x4004, RBC_INSTANCE_ID);
-        std::set<vsomeip::eventgroup_t> cmd_groups{0x0001};
-        application->offer_event(0x4004, RBC_INSTANCE_ID, 0x8001, cmd_groups,
-                                 vsomeip::event_type_e::ET_EVENT);
-        application->offer_event(0x4004, RBC_INSTANCE_ID, 0x8002, cmd_groups,
-                                 vsomeip::event_type_e::ET_EVENT);
+        // 0x4003/0x4004 write services are offered after IPC readiness above.
 
         // Offer an event → makes it discoverable
         application->offer_event(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID, groups);
 
         // Request own service/event → triggers SD discovery for remote services
-        application->request_service(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID);
+        application->request_service(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SOMEIP_MAJOR,
+                                     SOMEIP_MINOR);
         application->request_event(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID, groups,
                                    vsomeip::event_type_e::ET_EVENT);
 
         // Subscribe to event group → uses SD to manage subscriptions
-        application->subscribe(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENTGROUP_ID);
+        application->subscribe(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENTGROUP_ID,
+                               SOMEIP_MAJOR);
 
         // std::set<vsomeip::eventgroup_t> its_groups;
         // its_groups.insert(SAMPLE_EVENTGROUP_ID);
@@ -755,10 +773,10 @@ int main(int argc, const char* argv[]) {
                 application->unsubscribe(0x3003, RBC_INSTANCE_ID, 0x0004);
                 application->unsubscribe(0x3004, RBC_INSTANCE_ID, 0x0009);
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                application->subscribe(0x3003, RBC_INSTANCE_ID, 0x0002, 0x01);
-                application->subscribe(0x3003, RBC_INSTANCE_ID, 0x0003, 0x01);
-                application->subscribe(0x3003, RBC_INSTANCE_ID, 0x0004, 0x01);
-                application->subscribe(0x3004, RBC_INSTANCE_ID, 0x0009, 0x01);
+                application->subscribe(0x3003, RBC_INSTANCE_ID, 0x0002, SOMEIP_MAJOR);
+                application->subscribe(0x3003, RBC_INSTANCE_ID, 0x0003, SOMEIP_MAJOR);
+                application->subscribe(0x3003, RBC_INSTANCE_ID, 0x0004, SOMEIP_MAJOR);
+                application->subscribe(0x3004, RBC_INSTANCE_ID, 0x0009, SOMEIP_MAJOR);
             }
             //     }
 

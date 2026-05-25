@@ -13,8 +13,8 @@
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 
-# Target-specific visibility: only expose feeder components for x86_64 native builds
-# Cross-compilation to aarch64 does not have gRPC/protobuf libraries available in sysroot
+# KUKSA Broker Feeder components - compiled for aarch64
+# Uses local gRPC, protobuf, and abseil for cross-compilation support
 
 cc_library(
     name = "collector_client",

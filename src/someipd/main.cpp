@@ -58,7 +58,7 @@ static const vsomeip::instance_t RBC_INSTANCE_ID = 0x0001;
 
 static constexpr vsomeip::major_version_t SOMEIP_MAJOR = 0x01;
 static constexpr vsomeip::minor_version_t SOMEIP_MINOR = 0x00;
-static constexpr uint16_t WRITE_SERVICE_PORT = 4000;
+static constexpr uint16_t WRITE_SERVICE_PORT = 4001;
 static constexpr bool WRITE_SERVICE_IS_RELIABLE = false;
 static constexpr bool WRITE_SERVICE_USE_MAGIC_COOKIE = false;
 
@@ -74,6 +74,7 @@ static std::atomic<bool> rbc3003_subscribed{false};
 static std::atomic<bool> rbc3004_subscribed{false};
 static std::atomic<bool> rbc4003_subscribed{false};
 static std::atomic<bool> rbc4004_subscribed{false};
+static std::atomic<bool> read_path_setup_complete{false};
 
 // Mutex to protect multiple client access (if needed)
 static std::mutex client_mutex;
@@ -271,9 +272,13 @@ int main(int argc, const char* argv[]) {
 
             // Offer write services only after IPC is ready so CANoe discovery aligns
             // with an operational gatewayd -> someipd forwarding path.
+            while (!shutdown_requested.load() && !read_path_setup_complete.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+
             static bool services_offered = false;
-            if (!services_offered) {
-                std::cout << ">>> [OFFER] Offering write services (0x4003/0x4004/0x4007)"
+            if (!shutdown_requested.load() && !services_offered) {
+                std::cout << ">>> [OFFER] Offering write services (0x4003/0x4004/0x4006/0x4007/0x4008)"
                           << std::endl;
 
                 application->offer_service(0x4003, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
@@ -287,18 +292,23 @@ int main(int argc, const char* argv[]) {
                                          vsomeip::event_type_e::ET_EVENT,
                                          std::chrono::milliseconds::zero(), false, true, nullptr,
                                          vsomeip::reliability_type_e::RT_UNRELIABLE);
-                std::set<vsomeip::eventgroup_t> pos_cmd_groups{0x0002};
-                application->offer_event(0x4003, RBC_INSTANCE_ID, 0x8002, pos_cmd_groups,
-                                         vsomeip::event_type_e::ET_EVENT,
-                                         std::chrono::milliseconds::zero(), false, true, nullptr,
-                                         vsomeip::reliability_type_e::RT_UNRELIABLE);
 
                 application->offer_service(0x4004, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
                 application->update_service_configuration(
                     0x4004, RBC_INSTANCE_ID, WRITE_SERVICE_PORT, WRITE_SERVICE_IS_RELIABLE,
                     WRITE_SERVICE_USE_MAGIC_COOKIE, true);
+                std::set<vsomeip::eventgroup_t> hazard_cmd_groups{0x0001};
+                application->offer_event(0x4004, RBC_INSTANCE_ID, 0x8001, hazard_cmd_groups,
+                                         vsomeip::event_type_e::ET_EVENT,
+                                         std::chrono::milliseconds::zero(), false, true, nullptr,
+                                         vsomeip::reliability_type_e::RT_UNRELIABLE);
+
+                application->offer_service(0x4006, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
+                application->update_service_configuration(
+                    0x4006, RBC_INSTANCE_ID, WRITE_SERVICE_PORT, WRITE_SERVICE_IS_RELIABLE,
+                    WRITE_SERVICE_USE_MAGIC_COOKIE, true);
                 std::set<vsomeip::eventgroup_t> cmd_groups{0x0001};
-                application->offer_event(0x4004, RBC_INSTANCE_ID, 0x8001, cmd_groups,
+                application->offer_event(0x4006, RBC_INSTANCE_ID, 0x8001, cmd_groups,
                                          vsomeip::event_type_e::ET_EVENT,
                                          std::chrono::milliseconds::zero(), false, true, nullptr,
                                          vsomeip::reliability_type_e::RT_UNRELIABLE);
@@ -310,6 +320,15 @@ int main(int argc, const char* argv[]) {
                     WRITE_SERVICE_USE_MAGIC_COOKIE, true);
 
                 application->offer_event(0x4007, RBC_INSTANCE_ID, 0x8001, cmd_groups,
+                                         vsomeip::event_type_e::ET_EVENT,
+                                         std::chrono::milliseconds::zero(), false, true, nullptr,
+                                         vsomeip::reliability_type_e::RT_UNRELIABLE);
+
+                application->offer_service(0x4008, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
+                application->update_service_configuration(
+                    0x4008, RBC_INSTANCE_ID, WRITE_SERVICE_PORT, WRITE_SERVICE_IS_RELIABLE,
+                    WRITE_SERVICE_USE_MAGIC_COOKIE, true);
+                application->offer_event(0x4008, RBC_INSTANCE_ID, 0x8001, lock_cmd_groups,
                                          vsomeip::event_type_e::ET_EVENT,
                                          std::chrono::milliseconds::zero(), false, true, nullptr,
                                          vsomeip::reliability_type_e::RT_UNRELIABLE);
@@ -359,7 +378,16 @@ int main(int argc, const char* argv[]) {
                                 static_cast<vsomeip::byte_t>(payload[0])};
                             payload_obj->set_data(out.data(), out.size());
                             application->notify(0x4004, RBC_INSTANCE_ID, evt_id, payload_obj);
-                        } else if (svc_id == 0x4007 && evt_id == 0x8001) {
+                        } else if (svc_id == 0x4006 && evt_id == 0x8001) {
+                            std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
+                                      << " [svc=0x4006 evt=0x" << std::hex << evt_id << std::dec
+                                      << "]" << std::endl;
+                            auto payload_obj = vsomeip::runtime::get()->create_payload();
+                            std::array<vsomeip::byte_t, 1> out{
+                                static_cast<vsomeip::byte_t>(payload[0])};
+                            payload_obj->set_data(out.data(), out.size());
+                            application->notify(0x4006, RBC_INSTANCE_ID, evt_id, payload_obj);
+                        } else if (svc_id == 0x4007 && (evt_id == 0x8001)) {
                             std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
                                       << " [svc=0x4007 evt=0x" << std::hex << evt_id << std::dec
                                       << "]" << std::endl;
@@ -368,7 +396,7 @@ int main(int argc, const char* argv[]) {
                                 static_cast<vsomeip::byte_t>(payload[0])};
                             payload_obj->set_data(out.data(), out.size());
                             application->notify(0x4007, RBC_INSTANCE_ID, evt_id, payload_obj);
-                        } else if (svc_id == 0x4003 && (evt_id == 0x8001 || evt_id == 0x8002)) {
+                        } else if (svc_id == 0x4003 && (evt_id == 0x8001)) {
                             std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
                                       << " [svc=0x4003 evt=0x" << std::hex << evt_id << std::dec
                                       << "]" << std::endl;
@@ -377,7 +405,16 @@ int main(int argc, const char* argv[]) {
                                 static_cast<vsomeip::byte_t>(payload[0])};
                             payload_obj->set_data(out.data(), out.size());
                             application->notify(0x4003, RBC_INSTANCE_ID, evt_id, payload_obj);
-                        }
+                        } else if (svc_id == 0x4008 && (evt_id == 0x8001)) {
+                            std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
+                                      << " [svc=0x4008 evt=0x" << std::hex << evt_id << std::dec
+                                      << "]" << std::endl;
+                            auto payload_obj = vsomeip::runtime::get()->create_payload();
+                            std::array<vsomeip::byte_t, 1> out{
+                                static_cast<vsomeip::byte_t>(payload[0])};
+                            payload_obj->set_data(out.data(), out.size());
+                            application->notify(0x4008, RBC_INSTANCE_ID, evt_id, payload_obj);
+                        } 
                     },
                     max_sample_count);
             });
@@ -578,6 +615,7 @@ int main(int argc, const char* argv[]) {
         // -------------------------------
         application->request_service(0x3003, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
         application->request_service(0x3004, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
+        read_path_setup_complete.store(true);
         // application->request_service(0x4003, RBC_INSTANCE_ID, SOMEIP_MAJOR,
         //                              SOMEIP_MINOR);  // Request 0x4003 service
         // application->request_service(0x4004, RBC_INSTANCE_ID, SOMEIP_MAJOR,

@@ -37,6 +37,8 @@ static const std::size_t max_sample_count = 10;
 static const char* kParkingLightPath = "Vehicle.Body.Lights.Parking.IsOn";
 static const char* kHazardLampPath = "Vehicle.Body.Lights.Hazard.IsSignaling";
 static const char* kApproachLampPath = "Vehicle.Body.Trunk.Front.IsLightOn";
+static const char* kDriverLockPath = "Vehicle.Cabin.Door.Row1.DriverSide.IsLocked";
+static const char* kPassengerLockPath = "Vehicle.Cabin.Door.Row1.PassengerSide.IsLocked";
 static std::once_flag parking_subscriber_once;
 static std::atomic<bool> parking_subscriber_active{false};
 static std::shared_ptr<std::thread> parking_subscriber_thread;
@@ -46,6 +48,9 @@ static std::shared_ptr<std::thread> hazard_subscriber_thread;
 static std::once_flag approach_subscriber_once;
 static std::atomic<bool> approach_subscriber_active{false};
 static std::shared_ptr<std::thread> approach_subscriber_thread;
+static std::once_flag lock_unlock_subscriber_once;
+static std::atomic<bool> lock_unlock_subscriber_active{false};
+static std::shared_ptr<std::thread> lock_unlock_subscriber_thread;
 
 struct BrokerSignalSubscriptionConfig {
     const char* path;
@@ -53,6 +58,42 @@ struct BrokerSignalSubscriptionConfig {
     uint16_t method_id;
     const char* label;
 };
+
+static void sendBrokerSignalToSomeip(SomeipMessageTransferSkeleton& someip_message_skeleton,
+                                     uint16_t service_id, uint16_t method_id, uint32_t value) {
+    auto maybe_message = someip_message_skeleton.message_.Allocate();
+    if (!maybe_message.has_value()) {
+        std::cerr << "[gatewayd] Failed to allocate SOME/IP message" << std::endl;
+        return;
+    }
+
+    auto message_sample = std::move(maybe_message).value();
+    score::cpp::span<std::byte> message(
+        message_sample->data, network_service::interfaces::message_transfer::MAX_MESSAGE_SIZE);
+
+    std::size_t pos = 0;
+    message.data()[pos++] = static_cast<std::byte>(service_id >> 8);
+    message.data()[pos++] = static_cast<std::byte>(service_id & 0xFF);
+    message.data()[pos++] = static_cast<std::byte>(method_id >> 8);
+    message.data()[pos++] = static_cast<std::byte>(method_id & 0xFF);
+    pos += 4;
+
+    std::uint16_t client_id = 0xFFFF;
+    message.data()[pos++] = static_cast<std::byte>(client_id >> 8);
+    message.data()[pos++] = static_cast<std::byte>(client_id & 0xFF);
+
+    std::uint16_t session_id = 0x0001;
+    message.data()[pos++] = static_cast<std::byte>(session_id >> 8);
+    message.data()[pos++] = static_cast<std::byte>(session_id & 0xFF);
+
+    message.data()[pos++] = static_cast<std::byte>(0x01);
+    message.data()[pos++] = static_cast<std::byte>(0x01);
+    message.data()[pos++] = static_cast<std::byte>(0x01);
+    message.data()[pos++] = static_cast<std::byte>(0x00);
+    message.data()[pos++] = static_cast<std::byte>(value & 0xFF);
+    message_sample->size = pos;
+    someip_message_skeleton.message_.Send(std::move(message_sample));
+}
 
 static void subscribeToBrokerSignalStandalone(
     SomeipMessageTransferSkeleton& someip_message_skeleton,
@@ -145,39 +186,8 @@ static void subscribeToBrokerSignalStandalone(
             std::cout << "[gatewayd] " << config.label << " update from databroker: " << value
                       << " -> Sending to SOME/IP" << std::endl;
 
-            auto maybe_message = someip_message_skeleton.message_.Allocate();
-            if (!maybe_message.has_value()) {
-                std::cerr << "[gatewayd] Failed to allocate SOME/IP message" << std::endl;
-                continue;
-            }
-
-            auto message_sample = std::move(maybe_message).value();
-            score::cpp::span<std::byte> message(
-                message_sample->data,
-                network_service::interfaces::message_transfer::MAX_MESSAGE_SIZE);
-
-            std::size_t pos = 0;
-            message.data()[pos++] = static_cast<std::byte>(config.service_id >> 8);
-            message.data()[pos++] = static_cast<std::byte>(config.service_id & 0xFF);
-            message.data()[pos++] = static_cast<std::byte>(config.method_id >> 8);
-            message.data()[pos++] = static_cast<std::byte>(config.method_id & 0xFF);
-            pos += 4;
-
-            std::uint16_t client_id = 0xFFFF;
-            message.data()[pos++] = static_cast<std::byte>(client_id >> 8);
-            message.data()[pos++] = static_cast<std::byte>(client_id & 0xFF);
-
-            std::uint16_t session_id = 0x0001;
-            message.data()[pos++] = static_cast<std::byte>(session_id >> 8);
-            message.data()[pos++] = static_cast<std::byte>(session_id & 0xFF);
-
-            message.data()[pos++] = static_cast<std::byte>(0x01);
-            message.data()[pos++] = static_cast<std::byte>(0x01);
-            message.data()[pos++] = static_cast<std::byte>(0x01);
-            message.data()[pos++] = static_cast<std::byte>(0x00);
-            message.data()[pos++] = static_cast<std::byte>(value & 0xFF);
-            message_sample->size = pos;
-            someip_message_skeleton.message_.Send(std::move(message_sample));
+            sendBrokerSignalToSomeip(someip_message_skeleton, config.service_id, config.method_id,
+                                     value);
         }
     }
 
@@ -273,7 +283,7 @@ static void subscribeToParkingLightSignalStandalone(
                 }
 
                 std::cout << "[gatewayd] Parking light update from databroker: " << value
-                          << " -> Sending to SOME/IP (service 0x7506)" << std::endl;
+                          << " -> Sending to SOME/IP (service 0x4006)" << std::endl;
 
                 auto maybe_message = someip_message_skeleton.message_.Allocate();
                 if (!maybe_message.has_value()) {
@@ -288,11 +298,11 @@ static void subscribeToParkingLightSignalStandalone(
 
                 std::size_t pos = 0;
 
-                std::uint16_t service_id = 0x7506;
+                std::uint16_t service_id = 0x4006;
                 message.data()[pos++] = static_cast<std::byte>(service_id >> 8);
                 message.data()[pos++] = static_cast<std::byte>(service_id & 0xFF);
 
-                std::uint16_t method_id = 0x0001;
+                std::uint16_t method_id = 0x8001;
                 message.data()[pos++] = static_cast<std::byte>(method_id >> 8);
                 message.data()[pos++] = static_cast<std::byte>(method_id & 0xFF);
 
@@ -349,13 +359,124 @@ static void startHazardSubscriberOnce(SomeipMessageTransferSkeleton& someip_mess
 
 static void startApproachSubscriberOnce(SomeipMessageTransferSkeleton& someip_message_skeleton) {
     std::call_once(approach_subscriber_once, [&someip_message_skeleton]() {
-        static const BrokerSignalSubscriptionConfig kApproachConfig = {kApproachLampPath, 0x4004,
-                                                                       0x8002, "Approach lamp"};
+        static const BrokerSignalSubscriptionConfig kApproachConfig = {kApproachLampPath, 0x4007,
+                                                                       0x8001, "Approach lamp"};
         std::cout << "[gatewayd] Starting approach lamp databroker subscriber thread" << std::endl;
         approach_subscriber_active = true;
         approach_subscriber_thread = std::make_shared<std::thread>([&someip_message_skeleton]() {
             subscribeToBrokerSignalStandalone(someip_message_skeleton, kApproachConfig,
                                               approach_subscriber_active);
+        });
+    });
+}
+
+static void startLockUnlockSubscriberOnce(SomeipMessageTransferSkeleton& someip_message_skeleton) {
+    std::call_once(lock_unlock_subscriber_once, [&someip_message_skeleton]() {
+        std::cout << "[gatewayd] Starting car lock/unlock databroker subscriber thread for "
+                  << kDriverLockPath << " and " << kPassengerLockPath << std::endl;
+        lock_unlock_subscriber_active = true;
+        lock_unlock_subscriber_thread = std::make_shared<std::thread>([&someip_message_skeleton]() {
+            const std::string broker_addr =
+                std::getenv("BROKER_ADDR") ? std::getenv("BROKER_ADDR") : "localhost:55555";
+            const std::string broker_token =
+                std::getenv("BROKER_TOKEN") ? std::getenv("BROKER_TOKEN") : "";
+
+            std::cout << "[gatewayd] Car lock/unlock subscriber connecting to databroker at "
+                      << broker_addr << std::endl;
+
+            auto collector_client =
+                sdv::broker_feeder::CollectorClient::createInstance(broker_addr, broker_token);
+            if (!collector_client) {
+                std::cerr << "[gatewayd] Failed to create collector client for car lock/unlock"
+                          << " databroker subscription" << std::endl;
+                return;
+            }
+
+            auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(5);
+            const bool connected = collector_client->WaitForConnected(deadline);
+            std::cout << "[gatewayd] Car lock/unlock subscriber WaitForConnected=" << connected
+                      << std::endl;
+            if (!connected) {
+                std::cerr << "[gatewayd] Failed to connect to databroker at " << broker_addr
+                          << " for car lock/unlock" << std::endl;
+                return;
+            }
+
+            kuksa::val::v1::SubscribeRequest subscribe_request;
+            auto* driver_entry = subscribe_request.add_entries();
+            driver_entry->set_path(kDriverLockPath);
+            driver_entry->set_view(kuksa::val::v1::VIEW_ALL);
+            driver_entry->add_fields(kuksa::val::v1::FIELD_VALUE);
+            driver_entry->add_fields(kuksa::val::v1::FIELD_ACTUATOR_TARGET);
+            auto* passenger_entry = subscribe_request.add_entries();
+            passenger_entry->set_path(kPassengerLockPath);
+            passenger_entry->set_view(kuksa::val::v1::VIEW_ALL);
+            passenger_entry->add_fields(kuksa::val::v1::FIELD_VALUE);
+            passenger_entry->add_fields(kuksa::val::v1::FIELD_ACTUATOR_TARGET);
+
+            auto subscriber_context = collector_client->createClientContext();
+            std::cout << "[gatewayd] Sending Subscribe request for " << kDriverLockPath << " and "
+                      << kPassengerLockPath << std::endl;
+            auto reader = collector_client->Subscribe(subscriber_context.get(), subscribe_request);
+
+            if (!reader) {
+                std::cerr << "[gatewayd] Failed to create subscriber for car lock/unlock paths"
+                          << std::endl;
+                return;
+            }
+
+            std::cout << "[gatewayd] Subscribed to " << kDriverLockPath << " and "
+                      << kPassengerLockPath << " from databroker" << std::endl;
+
+            kuksa::val::v1::SubscribeResponse response;
+            while (lock_unlock_subscriber_active && reader->Read(&response)) {
+                for (const auto& update : response.updates()) {
+                    uint16_t service_id = 0;
+                    const char* label = nullptr;
+                    if (update.entry().path() == kDriverLockPath) {
+                        service_id = 0x4003;
+                        label = "Driver-side lock";
+                    } else if (update.entry().path() == kPassengerLockPath) {
+                        service_id = 0x4008;
+                        label = "Passenger-side lock";
+                    } else {
+                        continue;
+                    }
+
+                    uint32_t value = 0;
+                    bool has_datapoint = false;
+                    const auto* datapoint = &update.entry().value();
+                    if (update.entry().has_value()) {
+                        has_datapoint = true;
+                        datapoint = &update.entry().value();
+                    } else if (update.entry().has_actuator_target()) {
+                        has_datapoint = true;
+                        datapoint = &update.entry().actuator_target();
+                    }
+
+                    if (!has_datapoint) {
+                        continue;
+                    }
+
+                    if (datapoint->has_uint32()) {
+                        value = datapoint->uint32();
+                    } else if (datapoint->has_bool_()) {
+                        value = datapoint->bool_() ? 1 : 0;
+                    } else {
+                        continue;
+                    }
+
+                    std::cout << "[gatewayd] " << label << " update from databroker: " << value
+                              << " -> Sending to SOME/IP [svc=0x" << std::hex << service_id
+                              << " evt=0x8001]" << std::dec << std::endl;
+                    sendBrokerSignalToSomeip(someip_message_skeleton, service_id, 0x8001, value);
+                }
+            }
+
+            const auto status = reader->Finish();
+            std::cout << "[gatewayd] Car lock/unlock subscriber finished: ok=" << status.ok()
+                      << " code=" << status.error_code() << " message=" << status.error_message()
+                      << std::endl;
         });
     });
 }
@@ -546,7 +667,7 @@ void LocalServiceInstance::subscribeToParkingLightSignal() {
                 }
 
                 std::cout << "[gatewayd] Parking light update from databroker: " << value
-                          << " → Sending to SOME/IP (service 0x7506)" << std::endl;
+                          << " → Sending to SOME/IP (service 0x4006)" << std::endl;
 
                 // Send SOME/IP command to turn on/off parking lamp
                 auto maybe_message = someip_message_skeleton_.message_.Allocate();
@@ -562,13 +683,13 @@ void LocalServiceInstance::subscribeToParkingLightSignal() {
 
                 std::size_t pos = 0;
 
-                // SOME/IP Header: Service 0x7506 (Position Lamp Command)
-                std::uint16_t service_id = 0x7506;
+                // SOME/IP Header: Service 0x4006 (Position Lamp Command)
+                std::uint16_t service_id = 0x4006;
                 message.data()[pos++] = static_cast<std::byte>(service_id >> 8);
                 message.data()[pos++] = static_cast<std::byte>(service_id & 0xFF);
 
                 // Method ID
-                std::uint16_t method_id = 0x0001;
+                std::uint16_t method_id = 0x8001;
                 message.data()[pos++] = static_cast<std::byte>(method_id >> 8);
                 message.data()[pos++] = static_cast<std::byte>(method_id & 0xFF);
 
@@ -652,6 +773,11 @@ Result<mw::com::FindServiceHandle> LocalServiceInstance::CreateAsyncLocalService
         std::cout << "[gatewayd] Enabling databroker subscriber for "
                   << service_instance_config->instance_specifier()->string_view() << std::endl;
         startParkingSubscriberOnce(someip_message_skeleton);
+    } else if (service_instance_config->instance_specifier()->string_view() ==
+               "gatewayd/application_rbc_lock_unlock_cmd") {
+        std::cout << "[gatewayd] Enabling databroker subscriber for "
+                  << service_instance_config->instance_specifier()->string_view() << std::endl;
+        startLockUnlockSubscriberOnce(someip_message_skeleton);
     } else if (service_instance_config->instance_specifier()->string_view() ==
                "gatewayd/application_rbc_hazard_lamp_cmd") {
         std::cout << "[gatewayd] Enabling databroker subscriber for "

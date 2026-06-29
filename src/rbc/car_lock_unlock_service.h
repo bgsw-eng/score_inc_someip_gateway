@@ -88,6 +88,13 @@ struct CarLockUnlockCommand {
 DEFINE_RBC_SINGLE_EVENT_SERVICE(CarLockUnlockCommand, CarLockUnlockCommand,
                                 "rbc_car_lock_unlock_cmd")
 
+// ---------------------------------------------------------------------------
+// Event: vehicle_speed_data — Vehicle speed in km/h (Service 0x1001, Event 0x1002)
+struct VehicleSpeed {
+    float speed_kmh;  // Vehicle speed in km/h
+};
+DEFINE_RBC_SINGLE_EVENT_SERVICE(VehicleSpeed, VehicleSpeed, "vehicle_speed_data")
+
 }  // namespace rbc_service
 
 #endif  // SRC_RBC_CAR_LOCK_UNLOCK_SERVICE

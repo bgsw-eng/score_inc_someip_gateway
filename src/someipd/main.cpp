@@ -36,7 +36,6 @@ static const vsomeip::instance_t service_instance_id = 0x2222;
 static const vsomeip::method_t service_method_id = 0x3333;
 static const std::size_t max_sample_count = 10;
 
-// RBC (READ only) — signal table driven, see rbc_signals[] in main()
 static const vsomeip::instance_t RBC_INSTANCE_ID = 0x0001;
 
 // ---------------------------------------------------------------------------
@@ -70,6 +69,7 @@ using score::someip_gateway::network_service::interfaces::message_transfer::
 static std::atomic<bool> shutdown_requested{false};
 
 // Guards to prevent spawning multiple subscribe threads when ON_AVAILABLE fires repeatedly
+static std::atomic<bool> rbc3001_subscribed{false};
 static std::atomic<bool> rbc3003_subscribed{false};
 static std::atomic<bool> rbc3004_subscribed{false};
 static std::atomic<bool> rbc4003_subscribed{false};
@@ -90,6 +90,8 @@ int main(int argc, const char* argv[]) {
     std::signal(SIGTERM, termination_handler);
     std::signal(SIGINT, termination_handler);
 
+    std::cout << ">>> [someipd] Vehicle Speed Signal (0x3001/0x8002) support enabled" << std::endl;
+
     score::mw::com::runtime::InitializeRuntime(argc, argv);
 
     auto runtime = vsomeip::runtime::get();
@@ -100,27 +102,6 @@ int main(int argc, const char* argv[]) {
     }
 
     std::thread([application]() {
-        /*     auto handles =
-                 SomeipMessageTransferProxy::FindService(
-                     score::mw::com::InstanceSpecifier::Create(std::string("gatewayd/gatewayd_messages"))
-                         .value())
-                     .value();
-
-             {  // Proxy for receiving messages from gatewayd to be sent via SOME/IP
-                 auto proxy = SomeipMessageTransferProxy::Create(handles.front()).value();
-                 proxy.message_.Subscribe(max_sample_count);
-
-                 // Skeleton for transmitting messages from the network to gatewayd
-                 auto create_result = SomeipMessageTransferSkeleton::Create(
-                     score::mw::com::InstanceSpecifier::Create(std::string("someipd/someipd_messages"))
-                         .value());
-                 // TODO: Error handling
-                 auto skeleton = std::move(create_result).value();
-                 (void)skeleton.OfferService();
-
-                 application->register_message_handler(
-                     RESPONSE_SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID, SAMPLE_EVENT_ID,
-     */
         // -------------------------------
         // Message handler for received events
         // -------------------------------
@@ -130,19 +111,7 @@ int main(int argc, const char* argv[]) {
             //  [&skeleton](const std::shared_ptr<vsomeip::message>& msg) {
             [](const std::shared_ptr<vsomeip::message>& msg) {
                 std::lock_guard<std::mutex> lock(client_mutex);
-                /*    auto maybe_message = skeleton.message_.Allocate();
-                    if (!maybe_message.has_value()) {
-                        std::cerr << "Failed to allocate SOME/IP message:"
-                                  << maybe_message.error().Message() << std::endl;
-                        return;
-                    }
 
-                    auto message_sample = std::move(maybe_message).value();
-                    memcpy(message_sample->data + VSOMEIP_FULL_HEADER_SIZE,
-                           msg->get_payload()->get_data(), msg->get_payload()->get_length());
-                    message_sample->size =
-                        msg->get_payload()->get_length() + VSOMEIP_FULL_HEADER_SIZE;
-                    skeleton.message_.Send(std::move(message_sample));*/
                 // Internal loopback test event — suppress output
                 (void)msg;
             });
@@ -154,9 +123,15 @@ int main(int argc, const char* argv[]) {
         // -------------------------------
         application->register_state_handler([application](vsomeip::state_type_e state) {
             if (state == vsomeip::state_type_e::ST_REGISTERED) {
-                std::cout << ">>> Routing registered — re-requesting RBC services" << std::endl;
-                // request_service is called once in the for loop below.
-                // No duplicate calls here to avoid unbalanced ref-counts.
+                std::cout << ">>> Routing registered — resetting RBC subscription guards to allow "
+                             "re-subscription"
+                          << std::endl;
+                // Reset guards so availability handlers fire again if services are still advertised
+                rbc3001_subscribed.store(false);
+                rbc3003_subscribed.store(false);
+                rbc3004_subscribed.store(false);
+                rbc4003_subscribed.store(false);
+                rbc4004_subscribed.store(false);
             }
         });
 
@@ -177,18 +152,9 @@ int main(int argc, const char* argv[]) {
             std::set<vsomeip::eventgroup_t> eg9{0x0009};
             application->request_event(0x3004, RBC_INSTANCE_ID, 0x8009, eg9,
                                        vsomeip::event_type_e::ET_EVENT);
-
-            // Request events for command services FROM gatewayd.
-            // Use the same eventgroup that we later subscribe/offer so vsomeip
-            // does not create placeholder subscriptions for an unknown eventgroup.
-            std::set<vsomeip::eventgroup_t> eg1{0x0001};
-            // application->request_event(0x4003, RBC_INSTANCE_ID, 0x8001, eg1,
-            //                            vsomeip::event_type_e::ET_EVENT);
-            // application->request_event(0x4004, RBC_INSTANCE_ID, 0x8001, eg1,
-            //                           vsomeip::event_type_e::ET_EVENT);
-            // std::set<vsomeip::eventgroup_t> eg2_cmd{0x0002};
-            // application->request_event(0x4003, RBC_INSTANCE_ID, 0x8002, eg2_cmd,
-            //                            vsomeip::event_type_e::ET_EVENT);
+            std::set<vsomeip::eventgroup_t> eg5{0x0002};
+            application->request_event(0x3001, RBC_INSTANCE_ID, 0x8002, eg5,
+                                       vsomeip::event_type_e::ET_EVENT);
         }
 
         // -------------------------------
@@ -201,13 +167,17 @@ int main(int argc, const char* argv[]) {
             const char* label;
             const char* off_label;
             const char* on_label;
+            bool is_float_value;  // true for vehicle speed (2-byte float), false for bool
         };
 
         static const RbcSignal rbc_signals[] = {
-            {0x3003, 0x8002, 0x0002, "LOCK STATUS", "Car Unlocked", "Car Locked"},
-            {0x3003, 0x8003, 0x0003, "HAZARD LAMP", "Hazard lamp OFF", "Hazard lamp ON"},
-            {0x3003, 0x8004, 0x0004, "POSITION LAMP", "Position lamp OFF", "Position lamp ON"},
-            {0x3004, 0x8009, 0x0009, "APPROACH LAMP", "Approach lamp OFF", "Approach lamp ON"},
+            {0x3003, 0x8002, 0x0002, "LOCK STATUS", "Car Unlocked", "Car Locked", false},
+            {0x3003, 0x8003, 0x0003, "HAZARD LAMP", "Hazard lamp OFF", "Hazard lamp ON", false},
+            {0x3003, 0x8004, 0x0004, "POSITION LAMP", "Position lamp OFF", "Position lamp ON",
+             false},
+            {0x3004, 0x8009, 0x0009, "APPROACH LAMP", "Approach lamp OFF", "Approach lamp ON",
+             false},
+            {0x3001, 0x8002, 0x0002, "BATTERY SOC", nullptr, nullptr, true},
         };
 
         // Track last received value per RBC signal (-1 = not yet received)
@@ -278,8 +248,9 @@ int main(int argc, const char* argv[]) {
 
             static bool services_offered = false;
             if (!shutdown_requested.load() && !services_offered) {
-                std::cout << ">>> [OFFER] Offering write services (0x4003/0x4004/0x4006/0x4007/0x4008)"
-                          << std::endl;
+                std::cout
+                    << ">>> [OFFER] Offering write services (0x4003/0x4004/0x4006/0x4007/0x4008)"
+                    << std::endl;
 
                 application->offer_service(0x4003, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
                 std::set<vsomeip::eventgroup_t> lock_cmd_groups{0x0001};
@@ -333,12 +304,6 @@ int main(int argc, const char* argv[]) {
                                          std::chrono::milliseconds::zero(), false, true, nullptr,
                                          vsomeip::reliability_type_e::RT_UNRELIABLE);
 
-                // application->stop_offer_service(0x4003, RBC_INSTANCE_ID, SOMEIP_MAJOR,
-                //                                 SOMEIP_MINOR);
-                // application->offer_service(0x4003, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
-                // application->stop_offer_service(0x4004, RBC_INSTANCE_ID, SOMEIP_MAJOR,
-                //                                 SOMEIP_MINOR);
-                // application->offer_service(0x4004, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
                 services_offered = true;
             }
 
@@ -414,7 +379,7 @@ int main(int argc, const char* argv[]) {
                                 static_cast<vsomeip::byte_t>(payload[0])};
                             payload_obj->set_data(out.data(), out.size());
                             application->notify(0x4008, RBC_INSTANCE_ID, evt_id, payload_obj);
-                        } 
+                        }
                     },
                     max_sample_count);
             });
@@ -442,7 +407,14 @@ int main(int argc, const char* argv[]) {
                         std::cout << ">>> RBC " << sig.label << ": Payload too short" << std::endl;
                         return;
                     }
-                    const int v = static_cast<uint8_t>(data[0]);
+                    int v = static_cast<uint8_t>(data[0]);
+                    if (sig.is_float_value && len >= 8) {
+                        // Extract 8-byte double for Battery SOC (factor 0.5)
+                        double soc_raw = 0.0;
+                        std::memcpy(&soc_raw, data, 8);
+                        v = static_cast<int>(soc_raw *
+                                             100.0);  // Store as percentage*100 for comparison
+                    }
 
                     // Hold mutex only for last-value check/update — not during Send()
                     {
@@ -453,10 +425,19 @@ int main(int argc, const char* argv[]) {
                         rbc_last_value[sig_idx] = v;
                     }
 
-                    std::cout << ">>> [CANoe->gatewayd] CHANGED [service=0x" << std::hex
-                              << sig.service_id << " event=0x" << sig.event_id << std::dec
-                              << "] value=" << v << " (" << (v == 0 ? sig.off_label : sig.on_label)
-                              << ")" << std::endl;
+                    if (sig.is_float_value) {
+                        double soc_raw = 0.0;
+                        std::memcpy(&soc_raw, data, 8);
+                        float soc_percent = static_cast<float>(soc_raw * 0.5f);  // Apply factor 0.5
+                        std::cout << ">>> [CANoe->gatewayd] CHANGED [service=0x" << std::hex
+                                  << sig.service_id << " event=0x" << sig.event_id << std::dec
+                                  << "] value=" << soc_percent << "%" << std::endl;
+                    } else {
+                        std::cout << ">>> [CANoe->gatewayd] CHANGED [service=0x" << std::hex
+                                  << sig.service_id << " event=0x" << sig.event_id << std::dec
+                                  << "] value=" << v << " ("
+                                  << (v == 0 ? sig.off_label : sig.on_label) << ")" << std::endl;
+                    }
 
                     std::cout << ">>> [CANoe->gatewayd] FORWARDING to gatewayd IPC skeleton"
                               << std::endl;
@@ -529,6 +510,25 @@ int main(int argc, const char* argv[]) {
         // All message handlers above are already registered at this point.
         // -------------------------------
         application->register_availability_handler(
+            0x3001, RBC_INSTANCE_ID,
+            [application](vsomeip::service_t svc, vsomeip::instance_t inst, bool available) {
+                if (available) {
+                    std::cout << ">>> RBC 0x3001 available — subscribing eg=0x0002 (VEHICLE SPEED)"
+                              << std::endl;
+                    if (rbc3001_subscribed.exchange(true)) {
+                        return;  // already subscribed, skip
+                    }
+                    std::thread([application, svc, inst]() {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        application->subscribe(svc, inst, 0x0002, SOMEIP_MAJOR);
+                    }).detach();
+                } else {
+                    std::cout << ">>> RBC 0x3001 unavailable (VEHICLE SPEED)" << std::endl;
+                    rbc3001_subscribed.store(false);
+                }
+            });
+
+        application->register_availability_handler(
             0x3003, RBC_INSTANCE_ID,
             [application](vsomeip::service_t svc, vsomeip::instance_t inst, bool available) {
                 if (available) {
@@ -566,53 +566,11 @@ int main(int argc, const char* argv[]) {
                 }
             });
 
-        // application->register_availability_handler(
-        //     0x4003, RBC_INSTANCE_ID,
-        //     [application](vsomeip::service_t svc, vsomeip::instance_t inst, bool available) {
-        //         if (available) {
-        //             std::cout << ">>> RBC 0x4003 available — subscribing command (0x8002)"
-        //                       << std::endl;
-        //             if (rbc4003_subscribed.exchange(true)) {
-        //                 return;
-        //             }
-        //             std::thread([application, svc, inst]() {
-        //                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        //                 application->subscribe(svc, inst, 0x0001);
-        //                 application->subscribe(svc, inst, 0x0002);  // subscribe to eventgroup
-        //             }).detach();
-        //         } else {
-        //             std::cout << ">>> RBC 0x4003 unavailable" << std::endl;
-        //             rbc4003_subscribed.store(false);
-        //         }
-        //     });
-
-        // Availability handler for 0x4004 commands FROM gatewayd
-        //  application->register_availability_handler(
-        //      0x4004, RBC_INSTANCE_ID,
-        //      [application](vsomeip::service_t svc, vsomeip::instance_t inst, bool available) {
-        //          if (available) {
-        //              std::cout << ">>> RBC 0x4004 available — subscribing command
-        //              (0x8001/0x8002)"
-        //                        << std::endl;
-        //              if (rbc4004_subscribed.exchange(true)) {
-        //                  return;
-        //              }
-        //              std::thread([application, svc, inst]() {
-        //                  std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        //                  application->subscribe(svc, inst, 0x0001, SOMEIP_MAJOR, 0x0001);
-        //                  //     application->subscribe(svc, inst, 0x0002, SOMEIP_MAJOR);  //
-        //                  //     subscribe to eventgroup
-        //              }).detach();
-        //          } else {
-        //              std::cout << ">>> RBC 0x4004 unavailable" << std::endl;
-        //              rbc4004_subscribed.store(false);
-        //          }
-        //      });
-
         // -------------------------------
         // Step 3 — request_service: triggers SD + availability callback → subscribe.
         // Called once per unique service (not per signal) to avoid ref-count imbalance.
         // -------------------------------
+        application->request_service(0x3001, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
         application->request_service(0x3003, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
         application->request_service(0x3004, RBC_INSTANCE_ID, SOMEIP_MAJOR, SOMEIP_MINOR);
         read_path_setup_complete.store(true);
@@ -818,36 +776,6 @@ int main(int argc, const char* argv[]) {
             }
             //     }
 
-            /*
-                    proxy.message_.GetNewSamples(
-                        [&](auto message_sample) {
-                std::cout << ">>> MESSAGE RECEIVED <<<" << std::endl;
-                            },/*
-                            // TODO: Check if size is larger than capacity of data
-                            score::cpp::span<const std::byte> message(message_sample->data,
-                                                                      message_sample->size);
-
-                            // Check if sample size is valid and contains at least a SOME/IP header
-                            if (message.size() < VSOMEIP_FULL_HEADER_SIZE) {
-                                std::cerr << "Received too small sample (size: " << message.size()
-                                          << ", expected at least: " << VSOMEIP_FULL_HEADER_SIZE
-                                          << "). Skipping message." << std::endl;
-                                return;
-                            }
-
-                            // TODO: Here we need to find a better way how to pass the message to
-                            // vsomeip. There doesn't seem to be a public way to just wrap the
-               existing
-                            // buffer.
-                            auto payload_data = message.subspan(VSOMEIP_FULL_HEADER_SIZE);
-                            payload->set_data(
-                                reinterpret_cast<const vsomeip_v3::byte_t*>(payload_data.data()),
-                                payload_data.size());
-                            application->notify(SAMPLE_SERVICE_ID, SAMPLE_INSTANCE_ID,
-               SAMPLE_EVENT_ID, payload);
-                        },
-                        max_sample_count);
-            */
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
 

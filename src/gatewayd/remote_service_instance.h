@@ -31,7 +31,7 @@ class RemoteServiceInstance {
     using IpcSkeleton =
         std::variant<echo_service::EchoResponseSkeleton, rbc_service::CarLockUnlockStatusSkeleton,
                      rbc_service::HazardLampStatusSkeleton, rbc_service::PositionLampStatusSkeleton,
-                     rbc_service::ApproachLampStatusSkeleton>;
+                     rbc_service::ApproachLampStatusSkeleton, rbc_service::VehicleSpeedSkeleton>;
 
     RemoteServiceInstance(std::shared_ptr<const config::ServiceInstance> service_instance_config,
                           IpcSkeleton&& ipc_skeleton,

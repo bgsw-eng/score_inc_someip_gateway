@@ -61,6 +61,9 @@ static ExpectedSomeipSignal getExpectedSignal(std::string_view specifier) {
     if (specifier == "gatewayd/application_rbc_approach_lamp_status") {
         return {0x3004, 0x8009, "APPROACH LAMP"};
     }
+    if (specifier == "gatewayd/vehicle_speed") {
+        return {0x3001, 0x8002, "BATTERY SOC"};
+    }
     return {0xFFFF, 0xFFFF, "UNKNOWN"};
 }
 
@@ -77,14 +80,11 @@ static const char* getSignalNameByIds(uint16_t svc_id, uint16_t evt_id) {
     if (svc_id == 0x3004 && evt_id == 0x8009) {
         return "APPROACH LAMP";
     }
+    if (svc_id == 0x3001 && evt_id == 0x8002) {
+        return "BATTERY SOC";
+    }
     return "UNKNOWN";
 }
-
-// RBC signal mappings (received from SOME/IP, forwarded directly to KUKSA databroker)
-// LOCK STATUS   (0x3003/0x8002) → Vehicle.Powertrain.ElectricMotor.MU1_Reserved_01
-// HAZARD LAMP   (0x3003/0x8003) → Vehicle.Powertrain.ElectricMotor.MU1_Reserved_02
-// POSITION LAMP (0x3003/0x8004) → Vehicle.Powertrain.ElectricMotor.MU1_Reserved_03
-// APPROACH LAMP (0x3004/0x8009) → Vehicle.Powertrain.TractionBattery.DTE.MU2_Reserved01
 
 #if defined(ENABLE_KUKSA_BROKER_FEEDER)
 static const char* kBrokerAddrEnv = "BROKER_ADDR";
@@ -132,6 +132,10 @@ static void initBrokerFeeder() {
          sdv::databroker::v1::DataType::UINT32, sdv::databroker::v1::ChangeType::ON_CHANGE,
          sdv::broker_feeder::createNotAvailableValue(),
          "RBC approach lamp from SOME/IP 0x3004/0x8009"},
+        {"Vehicle.Powertrain.TractionBattery.StateOfCharge.Displayed",
+         sdv::databroker::v1::DataType::FLOAT, sdv::databroker::v1::ChangeType::ON_CHANGE,
+         sdv::broker_feeder::createNotAvailableValue(),
+         "Battery State Of Charge (SOC) from SOME/IP 0x3001/0x8002 - factor 0.5, range 0-100%"},
         {kSomeipLastServiceIdPath, sdv::databroker::v1::DataType::UINT32,
          sdv::databroker::v1::ChangeType::ON_CHANGE, sdv::broker_feeder::createNotAvailableValue(),
          "Last SOME/IP service id received by gatewayd"},
@@ -201,6 +205,26 @@ static void writeSomeipToDatabroker(uint16_t svc_id, uint16_t evt_id,
         standard_vss_path = "Vehicle.Body.Lights.Parking.IsOn";  // Map to standard VSS path
     } else if (svc_id == 0x3004 && evt_id == 0x8009) {
         rbc_vss_path = "Vehicle.Powertrain.TractionBattery.DTE.MU2_Reserved01";
+    } else if (svc_id == 0x3001 && evt_id == 0x8002) {
+        standard_vss_path = "Vehicle.Powertrain.TractionBattery.StateOfCharge.Displayed";
+        if (payload.size() >= 8) {
+            // Extract 8-byte double value and apply factor 0.5
+            double soc_raw = 0.0;
+            std::memcpy(&soc_raw, payload.data(), 8);
+            float soc_percent = static_cast<float>(soc_raw * 0.5f);  // Apply factor per spec
+            std::cout << "[gatewayd] " << signal_name << " (" << standard_vss_path
+                      << ") = " << soc_percent << "% → KUKSA Databroker" << std::endl;
+            broker_feeder->FeedValue(standard_vss_path,
+                                     sdv::broker_feeder::createDatapoint(soc_percent));
+            broker_feeder->FeedValue(kSomeipLastServiceIdPath, sdv::broker_feeder::createDatapoint(
+                                                                   static_cast<uint32_t>(svc_id)));
+            broker_feeder->FeedValue(kSomeipLastEventIdPath, sdv::broker_feeder::createDatapoint(
+                                                                 static_cast<uint32_t>(evt_id)));
+            broker_feeder->FeedValue(
+                kSomeipLastPayloadBytePath,
+                sdv::broker_feeder::createDatapoint(static_cast<uint32_t>(soc_percent)));
+            return;
+        }
     }
 
 #if defined(ENABLE_KUKSA_BROKER_FEEDER)
@@ -238,6 +262,7 @@ RemoteServiceInstance::RemoteServiceInstance(
     : service_instance_config_(std::move(service_instance_config)),
       ipc_skeleton_(std::move(ipc_skeleton)),
       someip_message_proxy_(std::move(someip_message_proxy)) {
+    std::cout << "[gatewayd] Vehicle Speed Signal (0x3001/0x8002) handler initialized" << std::endl;
 #if defined(ENABLE_KUKSA_BROKER_FEEDER)
     std::cout << "[gatewayd] KUKSA broker feeder support: ENABLED" << std::endl;
     // Bring feeder up at startup so connection status is visible even before first RBC status.

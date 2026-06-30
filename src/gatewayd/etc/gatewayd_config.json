@@ -73,6 +73,14 @@
                     "event_name": "mu2_reserved01"
                 }
             ]
+        },
+        {
+            "instance_specifier": "gatewayd/vehicle_speed",
+            "events": [
+                {
+                    "event_name": "vehicle_speed_data"
+                }
+            ]
         }
     ]
 }

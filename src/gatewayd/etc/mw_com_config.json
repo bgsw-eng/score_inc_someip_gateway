@@ -266,6 +266,25 @@
           ]
         }
       ]
+    },
+    {
+      "serviceTypeName": "/vehicle/VehicleSpeed",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7508,
+          "events": [
+            {
+              "eventName": "vehicle_speed_data",
+              "eventId": 0
+            }
+          ]
+        }
+      ]
     }
   ],
   "serviceInstances": [
@@ -284,7 +303,7 @@
           "events": [
             {
               "eventName": "message",
-              "numberOfSampleSlots": 10,
+              "numberOfSampleSlots": 100,
               "maxSubscribers": 1
             }
           ]
@@ -306,8 +325,8 @@
           "events": [
             {
               "eventName": "message",
-              "numberOfSampleSlots": 10,
-              "maxSubscribers": 8
+              "numberOfSampleSlots": 1000,
+              "maxSubscribers": 100
             }
           ]
         }
@@ -597,6 +616,28 @@
               "eventName": "rbc_position_lamp_on_off_cmd",
               "numberOfSampleSlots": 10,
               "maxSubscribers": 16
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "instanceSpecifier": "gatewayd/vehicle_speed",
+      "serviceTypeName": "/vehicle/VehicleSpeed",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 2104,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "vehicle_speed_data",
+              "numberOfSampleSlots": 50,
+              "maxSubscribers": 3
             }
           ]
         }

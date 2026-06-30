@@ -41,6 +41,7 @@ static const std::size_t SOMEIP_FULL_HEADER_SIZE = 16;
 static const char* kSomeipLastServiceIdPath = "Vehicle.Private.Gatewayd.Someip.LastServiceId";
 static const char* kSomeipLastEventIdPath = "Vehicle.Private.Gatewayd.Someip.LastEventId";
 static const char* kSomeipLastPayloadBytePath = "Vehicle.Private.Gatewayd.Someip.LastPayloadByte";
+static const char* kVehicleSpeedPath = "Vehicle.Speed";
 
 struct ExpectedSomeipSignal {
     uint16_t service_id;
@@ -62,7 +63,7 @@ static ExpectedSomeipSignal getExpectedSignal(std::string_view specifier) {
         return {0x3004, 0x8009, "APPROACH LAMP"};
     }
     if (specifier == "gatewayd/vehicle_speed") {
-        return {0x3001, 0x8002, "BATTERY SOC"};
+        return {0x3001, 0x8002, "VEHICLE SPEED"};
     }
     return {0xFFFF, 0xFFFF, "UNKNOWN"};
 }
@@ -81,9 +82,28 @@ static const char* getSignalNameByIds(uint16_t svc_id, uint16_t evt_id) {
         return "APPROACH LAMP";
     }
     if (svc_id == 0x3001 && evt_id == 0x8002) {
-        return "BATTERY SOC";
+        return "VEHICLE SPEED";
     }
     return "UNKNOWN";
+}
+
+static bool decodeVehicleSpeed(const score::cpp::span<const std::byte>& payload, float& speed_kmh,
+                               uint16_t& speed_raw) {
+    if (payload.size() < 1) {
+        return false;
+    }
+
+    // TEMPORARY IMPLEMENTATION:
+    // Vehicle speed is currently mapped from A_SOC_Value.
+    // A_SOC_Value is uint8, so payload is 1 byte.
+    //
+    // CANoe 10  -> 10 km/h
+    // CANoe 20  -> 20 km/h
+    // CANoe 100 -> 100 km/h
+    speed_raw = static_cast<uint16_t>(static_cast<uint8_t>(payload.data()[0]));
+    speed_kmh = static_cast<float>(speed_raw);
+
+    return true;
 }
 
 #if defined(ENABLE_KUKSA_BROKER_FEEDER)
@@ -132,10 +152,9 @@ static void initBrokerFeeder() {
          sdv::databroker::v1::DataType::UINT32, sdv::databroker::v1::ChangeType::ON_CHANGE,
          sdv::broker_feeder::createNotAvailableValue(),
          "RBC approach lamp from SOME/IP 0x3004/0x8009"},
-        {"Vehicle.Powertrain.TractionBattery.StateOfCharge.Displayed",
-         sdv::databroker::v1::DataType::FLOAT, sdv::databroker::v1::ChangeType::ON_CHANGE,
-         sdv::broker_feeder::createNotAvailableValue(),
-         "Battery State Of Charge (SOC) from SOME/IP 0x3001/0x8002 - factor 0.5, range 0-100%"},
+        {kVehicleSpeedPath, sdv::databroker::v1::DataType::FLOAT,
+         sdv::databroker::v1::ChangeType::ON_CHANGE, sdv::broker_feeder::createNotAvailableValue(),
+         "Vehicle speed from SOME/IP 0x3004/0x8005, uint16 big-endian scaled by /100"},
         {kSomeipLastServiceIdPath, sdv::databroker::v1::DataType::UINT32,
          sdv::databroker::v1::ChangeType::ON_CHANGE, sdv::broker_feeder::createNotAvailableValue(),
          "Last SOME/IP service id received by gatewayd"},
@@ -144,7 +163,7 @@ static void initBrokerFeeder() {
          "Last SOME/IP event id received by gatewayd"},
         {kSomeipLastPayloadBytePath, sdv::databroker::v1::DataType::UINT32,
          sdv::databroker::v1::ChangeType::ON_CHANGE, sdv::broker_feeder::createNotAvailableValue(),
-         "Last SOME/IP payload first byte received by gatewayd"},
+         "Last SOME/IP payload first byte/raw value received by gatewayd"},
     };
 
     collector_client =
@@ -206,25 +225,7 @@ static void writeSomeipToDatabroker(uint16_t svc_id, uint16_t evt_id,
     } else if (svc_id == 0x3004 && evt_id == 0x8009) {
         rbc_vss_path = "Vehicle.Powertrain.TractionBattery.DTE.MU2_Reserved01";
     } else if (svc_id == 0x3001 && evt_id == 0x8002) {
-        standard_vss_path = "Vehicle.Powertrain.TractionBattery.StateOfCharge.Displayed";
-        if (payload.size() >= 8) {
-            // Extract 8-byte double value and apply factor 0.5
-            double soc_raw = 0.0;
-            std::memcpy(&soc_raw, payload.data(), 8);
-            float soc_percent = static_cast<float>(soc_raw * 0.5f);  // Apply factor per spec
-            std::cout << "[gatewayd] " << signal_name << " (" << standard_vss_path
-                      << ") = " << soc_percent << "% → KUKSA Databroker" << std::endl;
-            broker_feeder->FeedValue(standard_vss_path,
-                                     sdv::broker_feeder::createDatapoint(soc_percent));
-            broker_feeder->FeedValue(kSomeipLastServiceIdPath, sdv::broker_feeder::createDatapoint(
-                                                                   static_cast<uint32_t>(svc_id)));
-            broker_feeder->FeedValue(kSomeipLastEventIdPath, sdv::broker_feeder::createDatapoint(
-                                                                 static_cast<uint32_t>(evt_id)));
-            broker_feeder->FeedValue(
-                kSomeipLastPayloadBytePath,
-                sdv::broker_feeder::createDatapoint(static_cast<uint32_t>(soc_percent)));
-            return;
-        }
+        standard_vss_path = kVehicleSpeedPath;
     }
 
 #if defined(ENABLE_KUKSA_BROKER_FEEDER)
@@ -234,17 +235,38 @@ static void writeSomeipToDatabroker(uint16_t svc_id, uint16_t evt_id,
                                                                static_cast<uint32_t>(svc_id)));
         broker_feeder->FeedValue(kSomeipLastEventIdPath, sdv::broker_feeder::createDatapoint(
                                                              static_cast<uint32_t>(evt_id)));
+
+        if (svc_id == 0x3001 && evt_id == 0x8002) {
+            float speed_kmh = 0.0f;
+            uint16_t speed_raw = 0U;
+            if (!decodeVehicleSpeed(payload, speed_kmh, speed_raw)) {
+                std::cerr << "[gatewayd] ERROR: VEHICLE SPEED payload too small: " << payload.size()
+                          << " byte(s), expected at least 2" << std::endl;
+                return;
+            }
+
+            std::cout << "[gatewayd] " << signal_name << " (" << standard_vss_path
+                      << ") = " << speed_kmh << " km/h -> KUKSA Databroker" << std::endl;
+
+            broker_feeder->FeedValue(standard_vss_path,
+                                     sdv::broker_feeder::createDatapoint(speed_kmh));
+            broker_feeder->FeedValue(
+                kSomeipLastPayloadBytePath,
+                sdv::broker_feeder::createDatapoint(static_cast<uint32_t>(speed_raw)));
+            return;
+        }
+
         broker_feeder->FeedValue(kSomeipLastPayloadBytePath,
                                  sdv::broker_feeder::createDatapoint(value));
 
         if (!rbc_vss_path.empty()) {
             std::cout << "[gatewayd] " << signal_name << " (" << rbc_vss_path << ") = " << value
-                      << " → KUKSA Databroker" << std::endl;
+                      << " -> KUKSA Databroker" << std::endl;
             broker_feeder->FeedValue(rbc_vss_path, sdv::broker_feeder::createDatapoint(value));
         }
         if (!standard_vss_path.empty()) {
             std::cout << "[gatewayd] " << signal_name << " (" << standard_vss_path
-                      << ") = " << value << " → KUKSA Databroker (standard VSS)" << std::endl;
+                      << ") = " << value << " -> KUKSA Databroker (standard VSS)" << std::endl;
             broker_feeder->FeedValue(standard_vss_path, sdv::broker_feeder::createDatapoint(value));
         }
         return;
@@ -262,7 +284,6 @@ RemoteServiceInstance::RemoteServiceInstance(
     : service_instance_config_(std::move(service_instance_config)),
       ipc_skeleton_(std::move(ipc_skeleton)),
       someip_message_proxy_(std::move(someip_message_proxy)) {
-    std::cout << "[gatewayd] Vehicle Speed Signal (0x3001/0x8002) handler initialized" << std::endl;
 #if defined(ENABLE_KUKSA_BROKER_FEEDER)
     std::cout << "[gatewayd] KUKSA broker feeder support: ENABLED" << std::endl;
     // Bring feeder up at startup so connection status is visible even before first RBC status.
@@ -320,6 +341,30 @@ RemoteServiceInstance::RemoteServiceInstance(
                                 sample.Get(), payload.data(),
                                 std::min(sizeof(echo_service::EchoResponseTiny), payload.size()));
                             skel.echo_response_tiny_.Send(std::move(sample));
+                        } else if constexpr (std::is_same_v<SkeletonT,
+                                                            rbc_service::VehicleSpeedSkeleton>) {
+                            float speed_kmh = 0.0f;
+                            uint16_t speed_raw = 0U;
+                            if (!decodeVehicleSpeed(payload, speed_kmh, speed_raw)) {
+                                std::cerr << "[gatewayd] VEHICLE SPEED payload too small"
+                                          << std::endl;
+                                return;
+                            }
+
+                            auto maybe_sample = skel.event_.Allocate();
+                            if (!maybe_sample.has_value()) {
+                                std::cerr << "Failed to allocate VEHICLE SPEED sample:"
+                                          << maybe_sample.error().Message() << std::endl;
+                                return;
+                            }
+
+                            auto sample = std::move(maybe_sample).value();
+                            sample.Get()->speed_kmh = speed_kmh;
+                            skel.event_.Send(std::move(sample));
+
+                            std::cout << "[gatewayd] " << signal_name
+                                      << " forwarded to IPC skeleton, value=" << speed_kmh
+                                      << " km/h" << std::endl;
                         } else {
                             // Generic path: all RBC single-event skeletons expose
                             // a uniform `event_` member via DEFINE_RBC_SINGLE_EVENT_SERVICE.
@@ -375,18 +420,20 @@ Result<mw::com::FindServiceHandle> RemoteServiceInstance::CreateAsyncRemoteServi
         std::cerr << "ERROR: Service instance config is nullptr!" << std::endl;
         return MakeUnexpected(mw::com::impl::ComErrc::kInvalidConfiguration);
     }
+
+    const std::string_view specifier = service_instance_config->instance_specifier()->string_view();
+    std::cout << "[gatewayd] Resolving remote instance specifier: " << specifier << std::endl;
+
     auto ipc_instance_specifier_result = score::mw::com::InstanceSpecifier::Create(
         service_instance_config->instance_specifier()->str());
     if (!ipc_instance_specifier_result.has_value()) {
-        std::cerr << "ERROR: Failed to resolve remote instance specifier '"
-                  << service_instance_config->instance_specifier()->string_view()
+        std::cerr << "ERROR: Failed to resolve remote instance specifier '" << specifier
                   << "'. The deployed mw_com_config.json likely does not contain this entry."
                   << std::endl;
         return MakeUnexpected(mw::com::impl::ComErrc::kInvalidConfiguration);
     }
     auto ipc_instance_specifier = std::move(ipc_instance_specifier_result).value();
 
-    const std::string_view specifier = service_instance_config->instance_specifier()->string_view();
     IpcSkeleton ipc_skeleton = [&]() -> IpcSkeleton {
         if (specifier == "gatewayd/application_rbc_lock_status") {
             return rbc_service::CarLockUnlockStatusSkeleton::Create(ipc_instance_specifier).value();
@@ -396,13 +443,14 @@ Result<mw::com::FindServiceHandle> RemoteServiceInstance::CreateAsyncRemoteServi
             return rbc_service::PositionLampStatusSkeleton::Create(ipc_instance_specifier).value();
         } else if (specifier == "gatewayd/application_rbc_approach_lamp_status") {
             return rbc_service::ApproachLampStatusSkeleton::Create(ipc_instance_specifier).value();
+        } else if (specifier == "gatewayd/vehicle_speed") {
+            return rbc_service::VehicleSpeedSkeleton::Create(ipc_instance_specifier).value();
         }
         // TODO: Error handling
         return echo_service::EchoResponseSkeleton::Create(ipc_instance_specifier).value();
     }();
 
-    std::cout << "Starting discovery of remote service: "
-              << service_instance_config->instance_specifier()->string_view() << "\n";
+    std::cout << "Starting discovery of remote service: " << specifier << "\n";
 
     auto someipd_instance_specifier_result =
         score::mw::com::InstanceSpecifier::Create(std::string("someipd/someipd_messages"));
@@ -422,6 +470,12 @@ Result<mw::com::FindServiceHandle> RemoteServiceInstance::CreateAsyncRemoteServi
     return SomeipMessageTransferProxy::StartFindService(
         [context = std::move(context)](auto handles, auto find_handle) {
             auto this_config = context->config;
+
+            if (handles.empty()) {
+                std::cerr << "No SomeipMessageTransferProxy handles found for "
+                          << this_config->instance_specifier()->string_view() << "\n";
+                return;
+            }
 
             auto proxy_result = SomeipMessageTransferProxy::Create(handles.front());
             if (!proxy_result.has_value()) {

@@ -177,7 +177,7 @@ int main(int argc, const char* argv[]) {
              false},
             {0x3004, 0x8009, 0x0009, "APPROACH LAMP", "Approach lamp OFF", "Approach lamp ON",
              false},
-            {0x3001, 0x8002, 0x0002, "BATTERY SOC", nullptr, nullptr, true},
+            {0x3001, 0x8002, 0x0002, "VEHICLE SPEED", nullptr, nullptr, true},
         };
 
         // Track last received value per RBC signal (-1 = not yet received)
@@ -328,57 +328,24 @@ int main(int argc, const char* argv[]) {
                         const auto payload = message.subspan(VSOMEIP_FULL_HEADER_SIZE);
                         const int v = static_cast<uint8_t>(payload[0]);
 
-                        std::cout << ">>> [IPC->SOMEIP] FRAME RECEIVED [svc=0x" << std::hex
-                                  << svc_id << " evt=0x" << evt_id << std::dec << "] value=" << v
-                                  << std::endl;
+                        std::cout << ">>> [IPC->SOMEIP] FRAME RECEIVED [svc=0x"
+                                  << std::hex << svc_id << " evt=0x" << evt_id
+                                  << std::dec << "] value=" << v << std::endl;
 
-                        // Publish command events on SOME/IP so handlers and subscribers can
-                        // observe.
-                        if (svc_id == 0x4004 && evt_id == 0x8001) {
+                        if ((svc_id == 0x4003 || svc_id == 0x4004 || svc_id == 0x4006 ||
+                             svc_id == 0x4007 || svc_id == 0x4008) &&
+                            evt_id == 0x8001) {
                             std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
-                                      << " [svc=0x4004 evt=0x" << std::hex << evt_id << std::dec
-                                      << "]" << std::endl;
+                                      << " [svc=0x" << std::hex << svc_id
+                                      << " evt=0x" << evt_id << std::dec << "]" << std::endl;
+
                             auto payload_obj = vsomeip::runtime::get()->create_payload();
+
                             std::array<vsomeip::byte_t, 1> out{
                                 static_cast<vsomeip::byte_t>(payload[0])};
+
                             payload_obj->set_data(out.data(), out.size());
-                            application->notify(0x4004, RBC_INSTANCE_ID, evt_id, payload_obj);
-                        } else if (svc_id == 0x4006 && evt_id == 0x8001) {
-                            std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
-                                      << " [svc=0x4006 evt=0x" << std::hex << evt_id << std::dec
-                                      << "]" << std::endl;
-                            auto payload_obj = vsomeip::runtime::get()->create_payload();
-                            std::array<vsomeip::byte_t, 1> out{
-                                static_cast<vsomeip::byte_t>(payload[0])};
-                            payload_obj->set_data(out.data(), out.size());
-                            application->notify(0x4006, RBC_INSTANCE_ID, evt_id, payload_obj);
-                        } else if (svc_id == 0x4007 && (evt_id == 0x8001)) {
-                            std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
-                                      << " [svc=0x4007 evt=0x" << std::hex << evt_id << std::dec
-                                      << "]" << std::endl;
-                            auto payload_obj = vsomeip::runtime::get()->create_payload();
-                            std::array<vsomeip::byte_t, 1> out{
-                                static_cast<vsomeip::byte_t>(payload[0])};
-                            payload_obj->set_data(out.data(), out.size());
-                            application->notify(0x4007, RBC_INSTANCE_ID, evt_id, payload_obj);
-                        } else if (svc_id == 0x4003 && (evt_id == 0x8001)) {
-                            std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
-                                      << " [svc=0x4003 evt=0x" << std::hex << evt_id << std::dec
-                                      << "]" << std::endl;
-                            auto payload_obj = vsomeip::runtime::get()->create_payload();
-                            std::array<vsomeip::byte_t, 1> out{
-                                static_cast<vsomeip::byte_t>(payload[0])};
-                            payload_obj->set_data(out.data(), out.size());
-                            application->notify(0x4003, RBC_INSTANCE_ID, evt_id, payload_obj);
-                        } else if (svc_id == 0x4008 && (evt_id == 0x8001)) {
-                            std::cout << ">>> [WRITE PATH] Publishing gatewayd command to SOME/IP"
-                                      << " [svc=0x4008 evt=0x" << std::hex << evt_id << std::dec
-                                      << "]" << std::endl;
-                            auto payload_obj = vsomeip::runtime::get()->create_payload();
-                            std::array<vsomeip::byte_t, 1> out{
-                                static_cast<vsomeip::byte_t>(payload[0])};
-                            payload_obj->set_data(out.data(), out.size());
-                            application->notify(0x4008, RBC_INSTANCE_ID, evt_id, payload_obj);
+                            application->notify(svc_id, RBC_INSTANCE_ID, evt_id, payload_obj);
                         }
                     },
                     max_sample_count);
@@ -407,36 +374,55 @@ int main(int argc, const char* argv[]) {
                         std::cout << ">>> RBC " << sig.label << ": Payload too short" << std::endl;
                         return;
                     }
-                    int v = static_cast<uint8_t>(data[0]);
-                    if (sig.is_float_value && len >= 8) {
-                        // Extract 8-byte double for Battery SOC (factor 0.5)
-                        double soc_raw = 0.0;
-                        std::memcpy(&soc_raw, data, 8);
-                        v = static_cast<int>(soc_raw *
-                                             100.0);  // Store as percentage*100 for comparison
+
+                    int compare_value = 0;
+
+                    if (sig.is_float_value) {
+                        // TEMPORARY IMPLEMENTATION:
+                        // A_SOC_Value is uint8, so use first byte directly as vehicle speed.
+                        //
+                        // CANoe 10  -> 10 km/h
+                        // CANoe 20  -> 20 km/h
+                        // CANoe 100 -> 100 km/h
+                        const uint8_t raw_speed = static_cast<uint8_t>(data[0]);
+                        const float speed_kmh = static_cast<float>(raw_speed);
+
+                        compare_value = static_cast<int>(speed_kmh * 100.0f);
+                    } else {
+                        compare_value = static_cast<uint8_t>(data[0]);
                     }
 
                     // Hold mutex only for last-value check/update — not during Send()
                     {
                         std::lock_guard<std::mutex> lock(client_mutex);
-                        if (v == rbc_last_value[sig_idx]) {
+
+                        if (compare_value == rbc_last_value[sig_idx]) {
                             return;
                         }
-                        rbc_last_value[sig_idx] = v;
+
+                        rbc_last_value[sig_idx] = compare_value;
                     }
 
                     if (sig.is_float_value) {
-                        double soc_raw = 0.0;
-                        std::memcpy(&soc_raw, data, 8);
-                        float soc_percent = static_cast<float>(soc_raw * 0.5f);  // Apply factor 0.5
-                        std::cout << ">>> [CANoe->gatewayd] CHANGED [service=0x" << std::hex
-                                  << sig.service_id << " event=0x" << sig.event_id << std::dec
-                                  << "] value=" << soc_percent << "%" << std::endl;
+                        const uint8_t raw_speed = static_cast<uint8_t>(data[0]);
+                        const float speed_kmh = static_cast<float>(raw_speed);
+
+                        std::cout << ">>> [CANoe->gatewayd] CHANGED [service=0x"
+                                  << std::hex << sig.service_id
+                                  << " event=0x" << sig.event_id
+                                  << std::dec << "] value=" << speed_kmh
+                                  << " km/h"
+                                  << " raw=" << static_cast<int>(raw_speed)
+                                  << std::endl;
                     } else {
-                        std::cout << ">>> [CANoe->gatewayd] CHANGED [service=0x" << std::hex
-                                  << sig.service_id << " event=0x" << sig.event_id << std::dec
-                                  << "] value=" << v << " ("
-                                  << (v == 0 ? sig.off_label : sig.on_label) << ")" << std::endl;
+                        const int v = static_cast<uint8_t>(data[0]);
+
+                        std::cout << ">>> [CANoe->gatewayd] CHANGED [service=0x"
+                                  << std::hex << sig.service_id
+                                  << " event=0x" << sig.event_id
+                                  << std::dec << "] value=" << v
+                                  << " (" << (v == 0 ? sig.off_label : sig.on_label) << ")"
+                                  << std::endl;
                     }
 
                     std::cout << ">>> [CANoe->gatewayd] FORWARDING to gatewayd IPC skeleton"
@@ -764,11 +750,13 @@ int main(int argc, const char* argv[]) {
             // unsubscribe first to reset ST_NOT_ACKNOWLEDGED so vsomeip
             // re-sends the SD SubscribeEventgroup with a UDP endpoint option.
             if (++resubscribe_tick % 4 == 0) {
+                application->unsubscribe(0x3001, RBC_INSTANCE_ID, 0x0002);
                 application->unsubscribe(0x3003, RBC_INSTANCE_ID, 0x0002);
                 application->unsubscribe(0x3003, RBC_INSTANCE_ID, 0x0003);
                 application->unsubscribe(0x3003, RBC_INSTANCE_ID, 0x0004);
                 application->unsubscribe(0x3004, RBC_INSTANCE_ID, 0x0009);
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                application->subscribe(0x3001, RBC_INSTANCE_ID, 0x0002, SOMEIP_MAJOR);
                 application->subscribe(0x3003, RBC_INSTANCE_ID, 0x0002, SOMEIP_MAJOR);
                 application->subscribe(0x3003, RBC_INSTANCE_ID, 0x0003, SOMEIP_MAJOR);
                 application->subscribe(0x3003, RBC_INSTANCE_ID, 0x0004, SOMEIP_MAJOR);
@@ -786,4 +774,6 @@ int main(int argc, const char* argv[]) {
     }).detach();
 
     application->start();
+
+    return 0;
 }
